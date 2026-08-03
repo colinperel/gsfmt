@@ -613,11 +613,40 @@ fn min_group_width(g: &Group, col: usize) -> MinWidth {
         }
     }
 
+    // A blank argument gets no block of its own: layout hangs its
+    // punctuation off the previous line (`, ,`), so its columns accumulate
+    // onto the preceding block's final-line figure — or onto the opening
+    // line when the group starts blank.
     let n = g.args.len();
-    let widest = g.args.iter().enumerate().fold(widest, |w, (i, arg)| {
-        let sep = if i + 1 < n { sep_len(g, i) } else { 0 };
-        w.max(min_items_width(arg, arg_indent).with_sep(sep))
-    });
+    let mut widest = widest;
+    let mut idx = 0;
+    let mut open_line = col + head;
+    while idx < n && g.args[idx].is_empty() {
+        if idx > 0 {
+            open_line += 1;
+        }
+        if idx + 1 < n {
+            open_line += sep_len(g, idx);
+        }
+        idx += 1;
+    }
+    widest = widest.max(open_line);
+    while idx < n {
+        // This argument's separator, plus every blank argument hanging off
+        // its final line (a joining space each, and all but a final blank's
+        // separator).
+        let mut end_cols = if idx + 1 < n { sep_len(g, idx) } else { 0 };
+        let mut j = idx + 1;
+        while j < n && g.args[j].is_empty() {
+            end_cols += 1;
+            if j + 1 < n {
+                end_cols += sep_len(g, j);
+            }
+            j += 1;
+        }
+        widest = widest.max(min_items_width(&g.args[idx], arg_indent).with_sep(end_cols));
+        idx = j;
+    }
     MinWidth { widest, last }
 }
 

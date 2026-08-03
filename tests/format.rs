@@ -595,6 +595,32 @@ fn the_width_bound_accounts_for_argument_separators() {
     }
 }
 
+/// A blank argument gets no line of its own: `layout_group` hangs its
+/// punctuation off the previous block's final line (`, ,`). The bound has to
+/// accumulate those columns onto that final-line figure, or the hang pushes
+/// an at-the-edge line over the width after the clamp already declined.
+#[test]
+fn the_width_bound_accounts_for_blank_argument_hangs() {
+    let sheet = "S".repeat(28);
+    for arg_len in 40..=50 {
+        let arg = "a".repeat(arg_len);
+        for src in [
+            format!("={sheet}!$A$3:INDEX({arg}, , 1)"),
+            format!("={sheet}!$A$3:INDEX({arg}, , , 1)"),
+            format!("={sheet}!$A$3:INDEX({arg}, ,)"),
+        ] {
+            let out = fmt(&src);
+            for line in out.lines() {
+                assert!(
+                    line.len() <= WIDTH,
+                    "avoidable overflow at arg_len={arg_len} ({} cols):\n{out}",
+                    line.len()
+                );
+            }
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────── locale ──
 
 /// In comma-decimal locales (de/fr/es and friends) `1,5` is the number 1.5
