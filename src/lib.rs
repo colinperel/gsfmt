@@ -569,9 +569,54 @@ fn ind(n: usize) -> String {
 /// natural indent hopeless here?" without laying anything out.
 fn min_group_width(g: &Group, col: usize) -> usize {
     let head = g.head.as_ref().map_or(0, |h| h.text.len()) + g.open.text.len();
-    let mut widest = (col + head).max(col + g.close.text.len());
-    for arg in &g.args {
-        widest = widest.max(min_items_width(arg, col + INDENT));
+    let widest = (col + head).max(col + g.close.text.len());
+    let arg_indent = col + INDENT;
+
+    // LET/IFS/SWITCH pin each key and its value to the same line, at a column
+    // derived from the widest key. Measuring their arguments independently
+    // underestimates: it reports a layout the formatter will never emit, and
+    // the caller then declines to clamp a body that genuinely does not fit.
+    if !g.is_array() {
+        if let Some(lead) = pair_lead(&g.name_upper()) {
+            if g.args.len() > lead + 1 {
+                return widest.max(min_pairs_width(g, lead, arg_indent));
+            }
+        }
+    }
+
+    g.args
+        .iter()
+        .fold(widest, |w, arg| w.max(min_items_width(arg, arg_indent)))
+}
+
+/// Minimum width of a pair-aligned body, mirroring `layout_pairs`' columns.
+fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize) -> usize {
+    let n = g.args.len();
+    let pair_count = (n - lead) / 2;
+    let has_tail = (n - lead) % 2 == 1;
+    let key_of = |p: usize| lead + p * 2;
+
+    let keys: Vec<String> = (0..pair_count)
+        .map(|p| render_inline(&g.args[key_of(p)], false).0)
+        .collect();
+    let widest_key = keys.iter().map(String::len).max().unwrap_or(0);
+    let aligned = widest_key + 2 <= ALIGN_MAX;
+
+    let mut widest = arg_indent;
+    for i in 0..lead {
+        widest = widest.max(min_items_width(&g.args[i], arg_indent));
+    }
+    for p in 0..pair_count {
+        let ki = key_of(p);
+        let value_col = if aligned {
+            arg_indent + widest_key + 2
+        } else {
+            arg_indent + keys[p].len() + 2
+        };
+        widest = widest.max(min_items_width(&g.args[ki + 1], value_col));
+    }
+    if has_tail {
+        widest = widest.max(min_items_width(&g.args[n - 1], arg_indent));
     }
     widest
 }

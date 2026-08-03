@@ -503,6 +503,34 @@ fn deeply_nested_prefixed_groups_stay_fast() {
     );
 }
 
+/// The width bound has to model pair layout. LET pins each key and its value
+/// to one line at a column derived from the widest key, so measuring its
+/// arguments independently reports a layout the formatter will never emit —
+/// and the caller then declines to clamp a body that genuinely does not fit.
+#[test]
+fn the_width_bound_accounts_for_let_pair_alignment() {
+    let body = "LET(aLongBindingName, someFunction(alphaValue, betaValue), \
+anotherBinding, 12345, aLongBindingName + anotherBinding)";
+
+    // On its own this body is comfortable.
+    let bare = fmt(&format!("=LET(q, {body}, q)"));
+    let bare_widest = bare.lines().map(str::len).max().unwrap_or(0);
+    assert!(bare_widest <= WIDTH, "test premise: bare body should fit");
+
+    // Behind a long prefix it must be clamped back, not shifted right.
+    for sheet_len in [8, 20, 40, 60] {
+        let sheet = "S".repeat(sheet_len);
+        let out = fmt(&format!("=LET(q, {sheet}!$AA$300:INDEX({body}, rr), q)"));
+        for line in out.lines() {
+            assert!(
+                line.len() <= WIDTH,
+                "avoidable overflow at sheet_len={sheet_len} ({} cols):\n{out}",
+                line.len()
+            );
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────── locale ──
 
 /// In comma-decimal locales (de/fr/es and friends) `1,5` is the number 1.5
