@@ -16,11 +16,15 @@ USAGE:
 
 OPTIONS:
     -m, --minify        Collapse the formula onto a single line
-    -w, --width <N>     Max line width before breaking
+    -w, --width <N>     Target line width before breaking
     -h, --help          Print this help
     -V, --version       Print version
 
 WIDTH:
+    A target, not a hard ceiling: a single token that cannot be broken --
+    a long name, reference, or string literal -- still prints in full and
+    may overshoot.
+
     Resolved from the first of these that is set (default 82):
       1. --width <N>
       2. $GSFMT_WIDTH
@@ -110,6 +114,7 @@ fn run() -> Result<ExitCode, String> {
     let mut minify = false;
     let mut width_flag: Option<usize> = None;
     let mut path: Option<String> = None;
+    let mut saw_input = false;
     let mut args = std::env::args().skip(1);
 
     while let Some(arg) = args.next() {
@@ -127,11 +132,20 @@ fn run() -> Result<ExitCode, String> {
                 let v = args.next().ok_or("--width requires a value")?;
                 width_flag = Some(v.parse().map_err(|_| format!("invalid width {v:?}"))?);
             }
-            "-" => path = None,
-            other if other.starts_with('-') => {
+            // A bare `-` means stdin; anything else starting with `-` is a
+            // typo'd flag, not a filename.
+            other if other != "-" && other.starts_with('-') => {
                 return Err(format!("unknown option {other:?}\n\n{USAGE}"));
             }
-            other => path = Some(other.to_string()),
+            other => {
+                // Exactly one input is supported. Silently formatting only
+                // the last of several would quietly ignore the user's files.
+                if saw_input {
+                    return Err("only one FILE argument is supported".into());
+                }
+                saw_input = true;
+                path = (other != "-").then(|| other.to_string());
+            }
         }
     }
 

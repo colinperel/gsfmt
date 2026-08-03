@@ -672,13 +672,19 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
     let aligned = widest + 2 <= ALIGN_MAX;
     let value_col = arg_indent + if aligned { widest + 2 } else { 0 };
 
+    // The separator that followed argument `i` in the source. Locales that
+    // use `;` instead of `,` must round-trip untouched — substituting one
+    // for the other is not a whitespace change.
+    let sep_after = |i: usize| g.seps.get(i).map_or(",", |t| t.text.as_str());
+
     let mut lines = vec![open.to_string()];
 
-    // Emit one logical element, appending `,` unless it closes the call.
-    let emit = |lines: &mut Vec<String>, mut block: Vec<String>, items: &[Node], last: bool| {
-        if !last {
+    // Emit one logical element, re-attaching its source separator unless it
+    // closes the call.
+    let emit = |lines: &mut Vec<String>, mut block: Vec<String>, items: &[Node], sep: &str| {
+        if !sep.is_empty() {
             let i = block.len() - 1;
-            block[i].push(',');
+            block[i].push_str(sep);
         }
         if lines.len() > 1 && first_token(items).is_some_and(|t| t.blank_before) {
             lines.push(String::new());
@@ -689,31 +695,39 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
     for i in 0..lead {
         let mut block = layout_items(&g.args[i], arg_indent, width, false);
         block[0] = format!("{}{}", ind(arg_indent), block[0]);
-        emit(&mut lines, block, &g.args[i], false);
+        emit(&mut lines, block, &g.args[i], sep_after(i));
     }
 
     for p in 0..pair_count {
         let ki = key_of(p);
         let vi = ki + 1;
         let key = &keys[p];
+        let key_sep = sep_after(ki);
         let col = if aligned {
             value_col
         } else {
             arg_indent + key.len() + 2
         };
-        let pad = col.saturating_sub(arg_indent + key.len() + 1).max(1);
+        let pad = col
+            .saturating_sub(arg_indent + key.len() + key_sep.len())
+            .max(1);
 
         let mut block = layout_items(&g.args[vi], col, width, false);
-        block[0] = format!("{}{},{}{}", ind(arg_indent), key, ind(pad), block[0]);
+        block[0] = format!("{}{key}{key_sep}{}{}", ind(arg_indent), ind(pad), block[0]);
         let last = !has_tail && p + 1 == pair_count;
-        emit(&mut lines, block, &g.args[ki], last);
+        emit(
+            &mut lines,
+            block,
+            &g.args[ki],
+            if last { "" } else { sep_after(vi) },
+        );
     }
 
     if has_tail {
         let i = n - 1;
         let mut block = layout_items(&g.args[i], arg_indent, width, false);
         block[0] = format!("{}{}", ind(arg_indent), block[0]);
-        emit(&mut lines, block, &g.args[i], true);
+        emit(&mut lines, block, &g.args[i], "");
     }
 
     lines.push(format!("{}{}", ind(indent), g.close.text));

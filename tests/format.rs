@@ -281,6 +281,46 @@ fn a_blank_argument_never_owns_a_line() {
     );
 }
 
+/// Sheets uses `;` as the argument separator in many locales. Swapping it
+/// for `,` is not a whitespace change — it corrupts the formula. Pair layout
+/// (LET/IFS/SWITCH) previously hardcoded commas.
+#[test]
+fn argument_separators_are_preserved() {
+    let cases = [
+        ("=LET(x;1;x+1)", "=LET(\n  x; 1;\n  x + 1\n)\n"),
+        ("=IFS(a;1;b;2)", "=IFS(\n  a; 1;\n  b; 2\n)\n"),
+        (
+            "=SWITCH(v;1;\"one\";2;\"two\")",
+            "=SWITCH(\n  v;\n  1; \"one\";\n  2; \"two\"\n)\n",
+        ),
+    ];
+    for (src, want) in cases {
+        assert_eq!(gsfmt::format(src, 14).unwrap(), want, "input: {src}");
+    }
+    // and the comma locale is untouched
+    assert_eq!(fmt("=LET(x,1,x+1)"), "=LET(\n  x, 1,\n  x + 1\n)\n");
+}
+
+#[test]
+fn separators_survive_a_minify_round_trip() {
+    for src in ["=LET(x;1;x+1)", "=IFS(a;1;b;2)", "=SUM({1,2;3,4})"] {
+        assert_eq!(min(&fmt(src)), min(src), "separator changed: {src}");
+    }
+}
+
+/// Width is a target, not a hard ceiling: a token that cannot be split has
+/// to print in full. Documented in `--help` and `dot_config/gsfmt/config`.
+#[test]
+fn an_unbreakable_token_may_exceed_the_width() {
+    let out = gsfmt::format("=SUM(someVeryLongIdentifierName)", 10).unwrap();
+    assert!(
+        out.lines().any(|l| l.len() > 10),
+        "expected an overshooting line:\n{out}"
+    );
+    // still structurally sound and stable
+    assert_eq!(gsfmt::format(&out, 10).unwrap(), out);
+}
+
 #[test]
 fn empty_input_is_a_no_op() {
     assert_eq!(fmt(""), "");
