@@ -475,6 +475,34 @@ fn a_medium_prefix_does_not_run_the_body_off_the_edge() {
     }
 }
 
+/// Deciding the continuation clamp by laying out both candidates and
+/// measuring them is exponential: every nested prefixed group runs its own
+/// two trials, doubling per level. A 624-byte depth-20 formula took ~5s, and
+/// depth 22 ~20s — an editor freeze on save.
+///
+/// The bound is deliberately loose. It is not a benchmark; it only has to be
+/// unreachable for anything super-polynomial, so a loaded machine cannot make
+/// it flake. Depth 40 formats in well under a tenth of a second; the
+/// exponential version would not finish this century.
+#[test]
+fn deeply_nested_prefixed_groups_stay_fast() {
+    let mut inner = String::from("x");
+    for i in 0..40 {
+        inner = format!("someSheet{i}!$AA$300:INDEX({inner}, rr)");
+    }
+    let src = format!("=LET(a, {inner}, a)");
+
+    let start = std::time::Instant::now();
+    let out = fmt(&src);
+    let elapsed = start.elapsed();
+
+    assert!(!out.is_empty());
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "formatting depth-40 input took {elapsed:?} — layout is super-polynomial again"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────── locale ──
 
 /// In comma-decimal locales (de/fr/es and friends) `1,5` is the number 1.5

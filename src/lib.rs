@@ -563,26 +563,54 @@ fn ind(n: usize) -> String {
     " ".repeat(n)
 }
 
-/// Widest column a laid-out block occupies. Line 0 carries no indent of its
-/// own — the caller places it at `first_col` — while later lines already hold
-/// their absolute indentation.
-fn block_width(lines: &[String], first_col: usize) -> usize {
-    lines
-        .iter()
-        .enumerate()
-        .map(|(i, l)| if i == 0 { first_col + l.len() } else { l.len() })
-        .max()
-        .unwrap_or(0)
+/// Narrowest width this group could occupy with its body starting at `col` —
+/// the width it would take if every breakable construct broke. Nothing can
+/// make it narrower, so comparing this against the target answers "is the
+/// natural indent hopeless here?" without laying anything out.
+fn min_group_width(g: &Group, col: usize) -> usize {
+    let head = g.head.as_ref().map_or(0, |h| h.text.len()) + g.open.text.len();
+    let mut widest = (col + head).max(col + g.close.text.len());
+    for arg in &g.args {
+        widest = widest.max(min_items_width(arg, col + INDENT));
+    }
+    widest
 }
 
-/// Widest continuation line, ignoring line 0.
+/// Same, for a sequence.
 ///
-/// Clamping moves the body and nothing else: line 0 sits at whatever column
-/// the prefix ends at either way. Including it in the comparison lets an
-/// unavoidably long opening line dominate both candidates and mask a body
-/// that clamping would genuinely rescue.
-fn body_width(lines: &[String]) -> usize {
-    lines.iter().skip(1).map(String::len).max().unwrap_or(0)
+/// A sequence only ever breaks at spaced binary operators, so everything
+/// between two of them is one atom as far as width goes. Treating each item
+/// as separately placeable underestimates badly: `sheet!$AA:$AA` is five
+/// tokens joined by tight operators that can never be split, and measuring
+/// them individually reported 80 columns for something that needs 88.
+fn min_items_width(items: &[Node], col: usize) -> usize {
+    let ops = binary_op_positions(items);
+    let mut bounds: Vec<usize> = Vec::with_capacity(ops.len() + 2);
+    bounds.push(0);
+    bounds.extend(ops.iter().copied());
+    bounds.push(items.len());
+
+    bounds
+        .windows(2)
+        .map(|w| min_chunk_width(&items[w[0]..w[1]], col))
+        .max()
+        .unwrap_or(col)
+}
+
+/// Narrowest width for one unbreakable run. Its leading tokens must all sit
+/// on one line; only a trailing group can open out, and at best its body is
+/// clamped back to `col + INDENT`.
+fn min_chunk_width(items: &[Node], col: usize) -> usize {
+    let (inline, offs) = render_inline(items, false);
+    let Some(gi) = items.iter().rposition(|n| matches!(n, Node::Group(_))) else {
+        return col + inline.len();
+    };
+    let Node::Group(g) = &items[gi] else {
+        unreachable!("rposition matched a group")
+    };
+    let head = g.head.as_ref().map_or(0, |h| h.text.len()) + g.open.text.len();
+    // The opening line is unavoidable; the body can at best be clamped.
+    (col + offs[gi] + head).max(min_group_width(g, col + INDENT))
 }
 
 /// `LET`/`IFS`/`SWITCH` bind (key, value) pairs that read best one pair per
@@ -724,20 +752,27 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
     // Passing the clamped value as both made an overlong group look like it
     // fitted inline, emitting a line far past the width.
     //
-    // Whether to clamp is decided by laying the body out and measuring it,
-    // not by asking whether a couple of columns happen to be free. A
-    // medium-length prefix leaves room by that test yet still pushes the
-    // body off the edge; only the real width knows.
+    // Whether to clamp is decided from the group's *minimum* achievable
+    // width at each candidate column — the width it would occupy if every
+    // breakable construct broke. That is a single non-branching walk of the
+    // subtree, so the decision costs O(nodes).
+    //
+    // Laying both candidates out and measuring them is the obvious
+    // alternative and is exponential: each trial recurses into nested
+    // prefixed groups that each run their own two trials, doubling per
+    // level. It reached ~5s on a depth-20 formula of 624 bytes, which is an
+    // editor freeze on save.
     let start_col = indent + prefix.len();
     let clamped = indent + INDENT;
-    let mut lines = layout_group(g, start_col, start_col, width, force);
-
-    if clamped < start_col && block_width(&lines, start_col) > width {
-        let alt = layout_group(g, start_col, clamped, width, force);
-        if body_width(&alt) < body_width(&lines) {
-            lines = alt;
-        }
-    }
+    let body = if clamped < start_col
+        && min_group_width(g, start_col) > width
+        && min_group_width(g, clamped) < min_group_width(g, start_col)
+    {
+        clamped
+    } else {
+        start_col
+    };
+    let mut lines = layout_group(g, start_col, body, width, force);
     lines[0] = format!("{prefix}{}", lines[0]);
     if !suffix.is_empty() {
         let last = lines.len() - 1;
