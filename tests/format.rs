@@ -445,6 +445,36 @@ fn a_clamped_continuation_does_not_lie_to_the_fit_test() {
     }
 }
 
+/// Whether to clamp has to be measured, not guessed from spare columns. A
+/// medium-length prefix leaves room by the "two columns free" test and still
+/// pushes the body well past the edge, even though every token would fit at a
+/// clamped indent.
+#[test]
+fn a_medium_prefix_does_not_run_the_body_off_the_edge() {
+    let sheet = "aMediumLengthSheetNameForTesting";
+    let src = format!(
+        "=LET(x, {sheet}!$AA$300:INDEX({sheet}!$AA:$AA, aFairlyLongRowCountVariableName), x)"
+    );
+    let out = fmt(&src);
+
+    let longest_token = src
+        .split(|c: char| "(), ".contains(c))
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    assert!(
+        longest_token <= WIDTH,
+        "test premise: every token should fit"
+    );
+    for line in out.lines() {
+        assert!(
+            line.len() <= WIDTH,
+            "avoidable overflow ({} cols, longest token {longest_token}):\n{out}",
+            line.len()
+        );
+    }
+}
+
 // ─────────────────────────────────────────────────────────────── locale ──
 
 /// In comma-decimal locales (de/fr/es and friends) `1,5` is the number 1.5

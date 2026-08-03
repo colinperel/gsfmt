@@ -563,6 +563,28 @@ fn ind(n: usize) -> String {
     " ".repeat(n)
 }
 
+/// Widest column a laid-out block occupies. Line 0 carries no indent of its
+/// own — the caller places it at `first_col` — while later lines already hold
+/// their absolute indentation.
+fn block_width(lines: &[String], first_col: usize) -> usize {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| if i == 0 { first_col + l.len() } else { l.len() })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Widest continuation line, ignoring line 0.
+///
+/// Clamping moves the body and nothing else: line 0 sits at whatever column
+/// the prefix ends at either way. Including it in the comparison lets an
+/// unavoidably long opening line dominate both candidates and mask a body
+/// that clamping would genuinely rescue.
+fn body_width(lines: &[String]) -> usize {
+    lines.iter().skip(1).map(String::len).max().unwrap_or(0)
+}
+
 /// `LET`/`IFS`/`SWITCH` bind (key, value) pairs that read best one pair per
 /// line with the values column-aligned. Returns how many leading arguments
 /// sit alone before the pairs begin.
@@ -698,18 +720,24 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
     //   start_col  where the group's opening line actually begins, after the
     //              prefix. Fit decisions must use this or they lie.
     //   body       where its continuation lines and closing bracket sit.
-    //              Clamped, because a long prefix (a sheet-qualified range,
-    //              say) would otherwise march the body off the right edge.
     //
     // Passing the clamped value as both made an overlong group look like it
     // fitted inline, emitting a line far past the width.
+    //
+    // Whether to clamp is decided by laying the body out and measuring it,
+    // not by asking whether a couple of columns happen to be free. A
+    // medium-length prefix leaves room by that test yet still pushes the
+    // body off the edge; only the real width knows.
     let start_col = indent + prefix.len();
-    let body = if start_col + INDENT <= width {
-        start_col
-    } else {
-        indent + INDENT
-    };
-    let mut lines = layout_group(g, start_col, body, width, force);
+    let clamped = indent + INDENT;
+    let mut lines = layout_group(g, start_col, start_col, width, force);
+
+    if clamped < start_col && block_width(&lines, start_col) > width {
+        let alt = layout_group(g, start_col, clamped, width, force);
+        if body_width(&alt) < body_width(&lines) {
+            lines = alt;
+        }
+    }
     lines[0] = format!("{prefix}{}", lines[0]);
     if !suffix.is_empty() {
         let last = lines.len() - 1;
