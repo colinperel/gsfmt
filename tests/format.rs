@@ -343,6 +343,60 @@ fn empty_input_is_a_no_op() {
     assert_eq!(min(""), "");
 }
 
+/// A long chain of binary operators has to break at its operators. Before
+/// this, the chain stayed on one line and the trailing-group break indented
+/// from its full width, producing a staircase that marched off the right
+/// edge — each nested call starting further right than the last.
+#[test]
+fn long_operator_chains_break_at_their_operators() {
+    let src = "=ARRAYFORMULA((createCol < cutoffDate) * (arrivalCol <= endDate) \
+* (shipmentCol > limitDate) * ISERR(SEARCH(\"Depot\", originCol)))";
+    let out = fmt(src);
+    assert_eq!(
+        out,
+        "=ARRAYFORMULA(\n  \
+           (createCol < cutoffDate)\n    \
+           * (arrivalCol <= endDate)\n    \
+           * (shipmentCol > limitDate)\n    \
+           * ISERR(SEARCH(\"Depot\", originCol))\n\
+         )\n"
+    );
+    for line in out.lines() {
+        assert!(line.len() <= WIDTH, "line over {WIDTH}: {line:?}");
+    }
+}
+
+/// The staircase showed up as each successive line being indented further
+/// than the last. Guard the shape directly, not just the width.
+#[test]
+fn nested_calls_after_a_long_prefix_do_not_staircase() {
+    let src = "=LET(valid, ARRAYFORMULA((a < b) * (c <= d) * (e > f) \
+* ISERR(SEARCH(\"Depot\", g))), valid)";
+    let out = fmt(src);
+    let indents: Vec<usize> = out
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .collect();
+    let deepest = indents.iter().copied().max().unwrap_or(0);
+    assert!(
+        deepest <= 24,
+        "indentation ran away (max {deepest}):\n{out}"
+    );
+}
+
+/// Tight operators are part of a single value and must never be break
+/// points, however long the reference is.
+#[test]
+fn references_never_break_at_their_colons_or_bangs() {
+    let src = "=LET(createCol, stock_data!$A$3:INDEX(stock_data!$A:$A, rLastRow), createCol)";
+    let out = fmt(src);
+    assert!(
+        out.contains("stock_data!$A$3:INDEX(stock_data!$A:$A, rLastRow)"),
+        "reference was split:\n{out}"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────── locale ──
 
 /// In comma-decimal locales (de/fr/es and friends) `1,5` is the number 1.5

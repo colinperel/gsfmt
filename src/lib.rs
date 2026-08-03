@@ -613,6 +613,35 @@ fn force_arg_break(g: &Group, arg_index: usize) -> bool {
     g.name_upper() == "LAMBDA" && g.args.len() > 1 && arg_index + 1 == g.args.len()
 }
 
+/// Positions of the *spaced* binary operators in a flat sequence — the only
+/// legal places to break a line.
+///
+/// Tight operators are excluded on purpose: `:` and `!` are part of a
+/// reference (`stock_data!$A$3:INDEX(...)`), `^` follows spreadsheet idiom,
+/// and a `%` or a unary sign binds to the operand it modifies. Breaking at
+/// any of those would split a single value across lines.
+fn binary_op_positions(items: &[Node]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut prev_operand = false;
+    for (i, node) in items.iter().enumerate() {
+        match node {
+            Node::Leaf(t) if t.kind == Kind::Op => {
+                let op = t.text.as_str();
+                if op == "%" {
+                    prev_operand = true;
+                } else if is_tight(op) || (matches!(op, "-" | "+") && !prev_operand) {
+                    prev_operand = false;
+                } else {
+                    out.push(i);
+                    prev_operand = false;
+                }
+            }
+            _ => prev_operand = true,
+        }
+    }
+    out
+}
+
 /// Lay out a sequence. Line 0 carries no indent (the caller places it);
 /// every later line carries its full absolute indent.
 ///
@@ -623,7 +652,29 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
         return vec![inline];
     }
 
-    // Break the last group in the sequence, keeping what precedes it on the
+    // An operator chain breaks at its operators, with the operator leading
+    // each continuation line. Without this a long chain stays on one line and
+    // the trailing-group break below indents from its full width, producing a
+    // staircase that marches off the right edge.
+    let ops = binary_op_positions(items);
+    if !ops.is_empty() {
+        let cont = indent + INDENT;
+        let mut lines = layout_items(&items[..ops[0]], indent, width, false);
+        for (n, &start) in ops.iter().enumerate() {
+            let end = ops.get(n + 1).copied().unwrap_or(items.len());
+            let Node::Leaf(op) = &items[start] else {
+                unreachable!("op position is a leaf")
+            };
+            let operand = &items[start + 1..end];
+            let head = format!("{}{} ", ind(cont), op.text);
+            let mut block = layout_items(operand, head.len(), width, false);
+            block[0] = format!("{head}{}", block[0]);
+            lines.extend(block);
+        }
+        return lines;
+    }
+
+    // No operators: break the last group, keeping what precedes it on the
     // opening line and what follows it on the closing line.
     let Some(gi) = items.iter().rposition(|n| matches!(n, Node::Group(_))) else {
         return vec![inline];
@@ -636,7 +687,14 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
     let glen = render_group_inline(g, false).len();
     let suffix = inline[offs[gi] + glen..].to_string();
 
-    let mut lines = layout_group(g, indent + prefix.len(), width, force);
+    // Clamp the continuation indent. A long prefix (a sheet-qualified range,
+    // say) would otherwise push the group's body past the right edge.
+    let group_indent = if indent + prefix.len() + INDENT <= width {
+        indent + prefix.len()
+    } else {
+        indent + INDENT
+    };
+    let mut lines = layout_group(g, group_indent, width, force);
     lines[0] = format!("{prefix}{}", lines[0]);
     if !suffix.is_empty() {
         let last = lines.len() - 1;
