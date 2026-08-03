@@ -656,8 +656,14 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
     // each continuation line. Without this a long chain stays on one line and
     // the trailing-group break below indents from its full width, producing a
     // staircase that marches off the right edge.
+    //
+    // Gated on real width pressure, not on `force`. `force` only means "do
+    // not take the inline shortcut here" (a LAMBDA body gets its own block,
+    // an authored blank line holds a group open); splitting a short `v * 2`
+    // across lines because of that would be gratuitous, and it also strips
+    // the very grouping that forced the break.
     let ops = binary_op_positions(items);
-    if !ops.is_empty() {
+    if indent + inline.len() > width && !ops.is_empty() {
         let cont = indent + INDENT;
         let mut lines = layout_items(&items[..ops[0]], indent, width, false);
         for (n, &start) in ops.iter().enumerate() {
@@ -687,14 +693,23 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
     let glen = render_group_inline(g, false).len();
     let suffix = inline[offs[gi] + glen..].to_string();
 
-    // Clamp the continuation indent. A long prefix (a sheet-qualified range,
-    // say) would otherwise push the group's body past the right edge.
-    let group_indent = if indent + prefix.len() + INDENT <= width {
-        indent + prefix.len()
+    // Two different columns, which must not be conflated:
+    //
+    //   start_col  where the group's opening line actually begins, after the
+    //              prefix. Fit decisions must use this or they lie.
+    //   body       where its continuation lines and closing bracket sit.
+    //              Clamped, because a long prefix (a sheet-qualified range,
+    //              say) would otherwise march the body off the right edge.
+    //
+    // Passing the clamped value as both made an overlong group look like it
+    // fitted inline, emitting a line far past the width.
+    let start_col = indent + prefix.len();
+    let body = if start_col + INDENT <= width {
+        start_col
     } else {
         indent + INDENT
     };
-    let mut lines = layout_group(g, group_indent, width, force);
+    let mut lines = layout_group(g, start_col, body, width, force);
     lines[0] = format!("{prefix}{}", lines[0]);
     if !suffix.is_empty() {
         let last = lines.len() - 1;
@@ -703,9 +718,19 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
     lines
 }
 
-fn layout_group(g: &Group, indent: usize, width: usize, force: bool) -> Vec<String> {
+/// `start_col` is where this group's opening line begins — used for every
+/// "does it fit?" decision. `indent` is where its continuation lines and
+/// closing bracket sit. They differ only when a prefix pushed the group right
+/// far enough that the body had to be clamped back.
+fn layout_group(
+    g: &Group,
+    start_col: usize,
+    indent: usize,
+    width: usize,
+    force: bool,
+) -> Vec<String> {
     let inline = render_group_inline(g, false);
-    if !force && !group_forces_break(g) && indent + inline.len() <= width {
+    if !force && !group_forces_break(g) && start_col + inline.len() <= width {
         return vec![inline];
     }
     if g.is_empty_call() {
@@ -755,7 +780,7 @@ fn layout_group(g: &Group, indent: usize, width: usize, force: bool) -> Vec<Stri
                 head_line.push_str(&laid[i][0]);
                 head_line.push_str(sep_after(i));
             }
-            (indent + head_line.len() <= width).then_some((k, head_line))
+            (start_col + head_line.len() <= width).then_some((k, head_line))
         }
         _ => None,
     };
@@ -789,7 +814,10 @@ fn layout_group(g: &Group, indent: usize, width: usize, force: bool) -> Vec<Stri
             let last = block.len() - 1;
             block[last].push_str(sep_after(i));
         }
-        if lines.len() > 1 && first_token(&g.args[i]).is_some_and(|t| t.blank_before) {
+        // `i > 0`, not `lines.len() > 1`: when leading arguments were packed
+        // onto the opening line, `lines` still holds only that line, and an
+        // authored blank before the next argument was being dropped.
+        if i > 0 && first_token(&g.args[i]).is_some_and(|t| t.blank_before) {
             lines.push(String::new());
         }
         lines.extend(block);

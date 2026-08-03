@@ -397,6 +397,54 @@ fn references_never_break_at_their_colons_or_bangs() {
     );
 }
 
+/// Operator splitting must answer to width, not to `force`. `force` only
+/// means "do not take the inline shortcut here" — a LAMBDA body getting its
+/// own block, or an authored blank line holding a group open. Splitting a
+/// short expression because of that also destroyed the grouping that caused
+/// the break in the first place.
+#[test]
+fn a_forced_break_does_not_split_a_short_operator_chain() {
+    let grouped = "=LAMBDA(\n  v,\n\n  v * 2\n)\n";
+    assert_eq!(fmt(grouped), grouped, "authored grouping must survive");
+
+    // the LAMBDA-body block rule likewise must not split a body that fits
+    assert_eq!(
+        fmt("=MAP(A1:A9, LAMBDA(v, v * 2 + 1))"),
+        "=MAP(A1:A9, LAMBDA(v, v * 2 + 1))\n"
+    );
+}
+
+/// A group's real starting column and its continuation indent are different
+/// numbers. Conflating them let an overlong group look like it fitted inline,
+/// emitting a line far past the width.
+#[test]
+fn a_clamped_continuation_does_not_lie_to_the_fit_test() {
+    let sheet = "aSheetNameDeliberatelyMadeVeryLongToForceTheContinuationClampToEngage";
+    let src = format!("=LET(a,1,b,LET(c,2,d,{sheet}!$AAA$3000:INDEX(qq, rr), d), b)");
+    let out = fmt(&src);
+
+    // INDEX(...) starts past the width, so it must break rather than trail off
+    assert!(
+        out.contains("INDEX(\n"),
+        "overlong group stayed inline:\n{out}"
+    );
+    // and its body is clamped back, not indented from the prefix's full width
+    for line in out.lines() {
+        let indent = line.len() - line.trim_start().len();
+        assert!(
+            indent <= 20,
+            "continuation indent ran away ({indent}):\n{out}"
+        );
+    }
+    // the only over-width line is the unbreakable reference token itself
+    for line in out.lines().filter(|l| l.len() > WIDTH) {
+        assert!(
+            line.contains(sheet),
+            "over-width line that is not an unbreakable token: {line:?}"
+        );
+    }
+}
+
 // ─────────────────────────────────────────────────────────────── locale ──
 
 /// In comma-decimal locales (de/fr/es and friends) `1,5` is the number 1.5
