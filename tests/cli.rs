@@ -18,13 +18,20 @@ struct Out {
 fn run(args: &[&str], env: &[(&str, &str)], stdin: &str) -> Out {
     let mut cmd = Command::new(BIN);
     cmd.args(args)
-        .env_remove("GSFMT_WIDTH")
-        .env_remove("GSFMT_CONFIG")
         // Keep the developer's own ~/.config/gsfmt/config out of the test.
         .env("XDG_CONFIG_HOME", "/nonexistent-gsfmt-test")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Clear every GSFMT_* variable rather than listing them: an enumerated
+    // list silently stops isolating the moment a new option is added, which
+    // is exactly how GSFMT_DECIMAL started leaking in. Tests opt back in
+    // explicitly via `env` below.
+    for (key, _) in std::env::vars() {
+        if key.starts_with("GSFMT_") {
+            cmd.env_remove(key);
+        }
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }
