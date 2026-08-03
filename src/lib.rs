@@ -630,16 +630,28 @@ fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize) -> usize {
 /// them individually reported 80 columns for something that needs 88.
 fn min_items_width(items: &[Node], col: usize) -> usize {
     let ops = binary_op_positions(items);
-    let mut bounds: Vec<usize> = Vec::with_capacity(ops.len() + 2);
-    bounds.push(0);
-    bounds.extend(ops.iter().copied());
-    bounds.push(items.len());
+    let Some(&first) = ops.first() else {
+        return min_chunk_width(items, col);
+    };
 
-    bounds
-        .windows(2)
-        .map(|w| min_chunk_width(&items[w[0]..w[1]], col))
-        .max()
-        .unwrap_or(col)
+    // Mirror the chain layout in `layout_items` exactly: the first chunk
+    // sits at `col`, and every operator starts a continuation line indented
+    // one step, with its operand beginning after the operator and a space.
+    // Measuring a chunk *from* its operator at the original column instead
+    // renders a leading `+` as a unary sign — no space, no continuation
+    // indent — and the bound comes in short, skipping a clamp the emitted
+    // line needed.
+    let cont = col + INDENT;
+    let mut widest = min_chunk_width(&items[..first], col);
+    for (n, &start) in ops.iter().enumerate() {
+        let end = ops.get(n + 1).copied().unwrap_or(items.len());
+        let Node::Leaf(op) = &items[start] else {
+            unreachable!("op position is a leaf")
+        };
+        let operand_col = cont + op.text.len() + 1;
+        widest = widest.max(min_chunk_width(&items[start + 1..end], operand_col));
+    }
+    widest
 }
 
 /// Narrowest width for one unbreakable run. Its leading tokens must all sit

@@ -531,6 +531,41 @@ anotherBinding, 12345, aLongBindingName + anotherBinding)";
     }
 }
 
+/// The width bound has to model the operator-chain layout it will actually
+/// emit: a continuation line is two more columns of indent, then the
+/// operator and a space, then the operand. Measuring a chunk from its
+/// operator at the original column renders a leading `+` as if it were a
+/// unary sign — no space, no continuation indent — so the bound came in
+/// three columns short, the clamp was skipped, and the emitted line
+/// overflowed avoidably.
+#[test]
+fn the_width_bound_accounts_for_operator_continuations() {
+    let operand = "aLongOperandIdentifierMadeExactly43Chars8XY";
+    assert_eq!(operand.len(), 43, "test premise: 43-column operand");
+
+    let body = format!("alphaValue + {operand} + betaValue");
+
+    // On its own this chain is comfortable.
+    let bare = fmt(&format!("=LET(q, INDEX({body}, rr), q)"));
+    let bare_widest = bare.lines().map(str::len).max().unwrap_or(0);
+    assert!(bare_widest <= WIDTH, "test premise: bare chain should fit");
+
+    // Behind prefixes of every length — including the ones that land the
+    // continuation just past the edge — it must be clamped back, never run
+    // over. Every token fits within the width, so no overflow is excusable.
+    for sheet_len in [8, 16, 20, 21, 22, 24, 32, 40, 56] {
+        let sheet = "S".repeat(sheet_len);
+        let out = fmt(&format!("=LET(q, {sheet}!$AA$300:INDEX({body}, rr), q)"));
+        for line in out.lines() {
+            assert!(
+                line.len() <= WIDTH,
+                "avoidable overflow at sheet_len={sheet_len} ({} cols):\n{out}",
+                line.len()
+            );
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────── locale ──
 
 /// In comma-decimal locales (de/fr/es and friends) `1,5` is the number 1.5
