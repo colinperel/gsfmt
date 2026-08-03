@@ -1,0 +1,6 @@
+=LET(
+  steuersatz; 0,19;
+  netto;      SUMME(B6:B);
+  brutto;     netto * (1 + steuersatz);
+  WENN(brutto > 1000,5; RUNDEN(brutto; 2); 0)
+)

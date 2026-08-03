@@ -17,6 +17,8 @@ USAGE:
 OPTIONS:
     -m, --minify        Collapse the formula onto a single line
     -w, --width <N>     Target line width before breaking
+    -d, --decimal <K>   Decimal mark: `dot` (1.5, args by `,`) or
+                        `comma` (1,5, args by `;`). Default: dot
     -h, --help          Print this help
     -V, --version       Print version
 
@@ -31,34 +33,42 @@ WIDTH:
       3. `width = <N>` in $GSFMT_CONFIG, else
          $XDG_CONFIG_HOME/gsfmt/config, else ~/.config/gsfmt/config
 
+DECIMAL:
+    Google Sheets takes this from the spreadsheet locale, and it cannot be
+    inferred from the text -- a US `{1,2;3,4}` already contains both
+    characters. Under `comma`, `1,5` is one number and arguments separate
+    with `;`; a `,` used as a separator is an error rather than a silent
+    rewrite. Resolved like width: --decimal, then $GSFMT_DECIMAL, then
+    `decimal = <dot|comma>` in the config file.
+
 EXIT CODES:
     0  success
     1  usage error
     2  the formula could not be parsed
 ";
 
-const DEFAULT_WIDTH: usize = 82;
-
-/// Pull `width = <N>` out of a config file. Blank lines and `#` comments are
+/// Pull `<key> = <value>` out of a config file. Blank lines and `#` comments are
 /// ignored; unknown keys are ignored too, so a newer config stays usable with
 /// an older binary.
-fn width_from_config(text: &str) -> Option<Result<usize, String>> {
+fn value_from_config<'a>(text: &'a str, want: &str) -> Option<&'a str> {
     for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        if key.trim() != "width" {
-            continue;
+        if key.trim() == want {
+            return Some(value.trim());
         }
-        let value = value.trim();
-        return Some(
-            value
-                .parse()
-                .map_err(|_| format!("invalid width {value:?} in config")),
-        );
     }
     None
+}
+
+fn parse_decimal(raw: &str) -> Result<gsfmt::Decimal, String> {
+    match raw {
+        "dot" => Ok(gsfmt::Decimal::Dot),
+        "comma" => Ok(gsfmt::Decimal::Comma),
+        other => Err(format!("invalid decimal {other:?} (expected dot or comma)")),
+    }
 }
 
 /// Config path: `$GSFMT_CONFIG`, else `$XDG_CONFIG_HOME/gsfmt/config`, else
@@ -77,27 +87,37 @@ fn config_path() -> Option<std::path::PathBuf> {
         .map(|h| std::path::Path::new(&h).join(".config/gsfmt/config"))
 }
 
-/// `--width` wins, then `$GSFMT_WIDTH`, then the config file, then the default.
-fn resolve_width(flag: Option<usize>) -> Result<usize, String> {
-    if let Some(w) = flag {
-        return Ok(w);
+/// Read the config file once; both settings resolve against it.
+fn config_text() -> Option<(std::path::PathBuf, String)> {
+    let path = config_path()?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    Some((path, text))
+}
+
+/// Flag wins, then the environment, then the config file, then the default.
+fn resolve<T>(
+    flag: Option<T>,
+    env_key: &str,
+    config_key: &str,
+    cfg: Option<&(std::path::PathBuf, String)>,
+    parse: impl Fn(&str) -> Result<T, String>,
+    default: T,
+) -> Result<T, String> {
+    if let Some(v) = flag {
+        return Ok(v);
     }
-    if let Ok(raw) = std::env::var("GSFMT_WIDTH") {
+    if let Ok(raw) = std::env::var(env_key) {
         let raw = raw.trim();
         if !raw.is_empty() {
-            return raw
-                .parse()
-                .map_err(|_| format!("invalid GSFMT_WIDTH {raw:?}"));
+            return parse(raw).map_err(|e| format!("{env_key}: {e}"));
         }
     }
-    if let Some(path) = config_path() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            if let Some(found) = width_from_config(&text) {
-                return found.map_err(|e| format!("{}: {e}", path.display()));
-            }
+    if let Some((path, text)) = cfg {
+        if let Some(raw) = value_from_config(text, config_key) {
+            return parse(raw).map_err(|e| format!("{}: {e}", path.display()));
         }
     }
-    Ok(DEFAULT_WIDTH)
+    Ok(default)
 }
 
 fn main() -> ExitCode {
@@ -113,6 +133,7 @@ fn main() -> ExitCode {
 fn run() -> Result<ExitCode, String> {
     let mut minify = false;
     let mut width_flag: Option<usize> = None;
+    let mut decimal_flag: Option<gsfmt::Decimal> = None;
     let mut path: Option<String> = None;
     let mut saw_input = false;
     let mut args = std::env::args().skip(1);
@@ -132,6 +153,10 @@ fn run() -> Result<ExitCode, String> {
                 let v = args.next().ok_or("--width requires a value")?;
                 width_flag = Some(v.parse().map_err(|_| format!("invalid width {v:?}"))?);
             }
+            "-d" | "--decimal" => {
+                let v = args.next().ok_or("--decimal requires a value")?;
+                decimal_flag = Some(parse_decimal(&v)?);
+            }
             // A bare `-` means stdin; anything else starting with `-` is a
             // typo'd flag, not a filename.
             other if other != "-" && other.starts_with('-') => {
@@ -149,10 +174,30 @@ fn run() -> Result<ExitCode, String> {
         }
     }
 
-    let width = resolve_width(width_flag)?;
+    let cfg = config_text();
+    let width = resolve(
+        width_flag,
+        "GSFMT_WIDTH",
+        "width",
+        cfg.as_ref(),
+        |raw| {
+            raw.parse::<usize>()
+                .map_err(|_| format!("invalid width {raw:?}"))
+        },
+        gsfmt::DEFAULT_WIDTH,
+    )?;
     if width == 0 {
         return Err("width must be greater than 0".into());
     }
+    let decimal = resolve(
+        decimal_flag,
+        "GSFMT_DECIMAL",
+        "decimal",
+        cfg.as_ref(),
+        parse_decimal,
+        gsfmt::Decimal::default(),
+    )?;
+    let opts = gsfmt::Options { width, decimal };
 
     let src = if let Some(p) = &path {
         std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?
@@ -165,9 +210,9 @@ fn run() -> Result<ExitCode, String> {
     };
 
     let result = if minify {
-        gsfmt::minify(&src)
+        gsfmt::minify(&src, &opts)
     } else {
-        gsfmt::format(&src, width)
+        gsfmt::format(&src, &opts)
     };
 
     match result {
@@ -186,24 +231,30 @@ fn run() -> Result<ExitCode, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::width_from_config;
+    use super::{parse_decimal, value_from_config};
 
     #[test]
-    fn config_width_is_parsed() {
-        assert_eq!(width_from_config("width = 70").unwrap().unwrap(), 70);
-        assert_eq!(width_from_config("  width=70  ").unwrap().unwrap(), 70);
+    fn config_values_are_parsed() {
+        assert_eq!(value_from_config("width = 70", "width"), Some("70"));
+        assert_eq!(value_from_config("  width=70  ", "width"), Some("70"));
+        assert_eq!(
+            value_from_config("decimal = comma", "decimal"),
+            Some("comma")
+        );
     }
 
     #[test]
     fn comments_and_unknown_keys_are_ignored() {
         let text = "# gsfmt config\n\nfuture_key = yes\nwidth = 96  # trailing\n";
-        assert_eq!(width_from_config(text).unwrap().unwrap(), 96);
-        assert!(width_from_config("# width = 70").is_none());
-        assert!(width_from_config("indent = 4").is_none());
+        assert_eq!(value_from_config(text, "width"), Some("96"));
+        assert_eq!(value_from_config("# width = 70", "width"), None);
+        assert_eq!(value_from_config("indent = 4", "width"), None);
     }
 
     #[test]
-    fn a_bad_width_is_an_error_not_a_silent_default() {
-        assert!(width_from_config("width = wide").unwrap().is_err());
+    fn decimal_values_are_validated() {
+        assert_eq!(parse_decimal("dot").unwrap(), gsfmt::Decimal::Dot);
+        assert_eq!(parse_decimal("comma").unwrap(), gsfmt::Decimal::Comma);
+        assert!(parse_decimal("period").is_err());
     }
 }

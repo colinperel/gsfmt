@@ -21,6 +21,50 @@
 
 use std::fmt;
 
+/// Default target line width. See `dot_config/gsfmt/config` for why 82.
+pub const DEFAULT_WIDTH: usize = 82;
+
+/// Which character is the decimal mark — and therefore what `,` means.
+///
+/// Google Sheets picks this from the spreadsheet's locale. It cannot be
+/// inferred from the formula text: a US formula's `{1,2;3,4}` already
+/// contains both characters, so presence of `;` proves nothing. It is
+/// therefore an explicit input, supplied by the CLI/config boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Decimal {
+    /// `1.5`, arguments separated by `,` (and `;` for array rows).
+    #[default]
+    Dot,
+    /// `1,5`, arguments separated by `;` — de/fr/es and similar locales.
+    Comma,
+}
+
+impl Decimal {
+    fn mark(self) -> char {
+        match self {
+            Decimal::Dot => '.',
+            Decimal::Comma => ',',
+        }
+    }
+}
+
+/// Everything the formatter needs beyond the source text.
+#[derive(Debug, Clone, Copy)]
+pub struct Options {
+    /// Target line width. Not a hard ceiling — an unbreakable token wins.
+    pub width: usize,
+    pub decimal: Decimal,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            width: DEFAULT_WIDTH,
+            decimal: Decimal::default(),
+        }
+    }
+}
+
 /// Indent added per nesting level.
 const INDENT: usize = 2;
 
@@ -94,12 +138,14 @@ fn is_ident_body(c: char) -> bool {
 ///
 /// # Errors
 ///
-/// Returns an error for an unterminated string or quoted sheet name, or a
-/// character that cannot start any token.
+/// Returns an error for an unterminated string or quoted sheet name, a
+/// character that cannot start any token, or a `,` used as an argument
+/// separator under [`Decimal::Comma`].
 // One dispatch chain over the token kinds; splitting it into per-kind
 // helpers would scatter the shared cursor and read worse.
 #[allow(clippy::too_many_lines)]
-pub fn tokenize(src: &str) -> Result<Vec<Token>, Error> {
+pub fn tokenize(src: &str, decimal: Decimal) -> Result<Vec<Token>, Error> {
+    let dec = decimal.mark();
     let c: Vec<char> = src.chars().collect();
     let mut out: Vec<Token> = Vec::new();
     let mut i = 0usize;
@@ -167,11 +213,34 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, Error> {
                 i += 1;
             }
             (c[start..i].iter().collect::<String>(), Kind::Atom)
-        } else if ch.is_ascii_digit() || (ch == '.' && i + 1 < c.len() && c[i + 1].is_ascii_digit())
+        } else if ch.is_ascii_digit()
+            // A leading decimal mark (`.5`) is ordinary US shorthand, but a
+            // leading `,5` under Decimal::Comma is indistinguishable from a
+            // stray separator. Requiring a digit in front means mixed-locale
+            // input is reported rather than quietly reinterpreted.
+            || (decimal == Decimal::Dot
+                && ch == dec
+                && i + 1 < c.len()
+                && c[i + 1].is_ascii_digit())
         {
-            // Number, including a trailing exponent.
-            while i < c.len() && (c[i].is_ascii_digit() || c[i] == '.') {
-                i += 1;
+            // Number, including a trailing exponent. Under Decimal::Comma the
+            // mark is `,`, so `1,5` is one token and never gets a space
+            // inserted into it.
+            //
+            // At most one decimal mark: without this the scan is greedy and
+            // `1,5,2,5` becomes a single bogus token instead of a number
+            // followed by a stray separator (and `1.5.2` likewise in dot
+            // mode). Stopping here lets the caller report the real problem.
+            let mut seen_mark = false;
+            while i < c.len() {
+                if c[i].is_ascii_digit() {
+                    i += 1;
+                } else if c[i] == dec && !seen_mark {
+                    seen_mark = true;
+                    i += 1;
+                } else {
+                    break;
+                }
             }
             if i < c.len()
                 && matches!(c[i], 'e' | 'E')
@@ -209,9 +278,26 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, Error> {
         } else if matches!(ch, ')' | '}') {
             i += 1;
             (ch.to_string(), Kind::Close)
-        } else if matches!(ch, ',' | ';') {
+        } else if ch == ';' {
             i += 1;
             (ch.to_string(), Kind::Sep)
+        } else if ch == ',' {
+            match decimal {
+                Decimal::Dot => {
+                    i += 1;
+                    (ch.to_string(), Kind::Sep)
+                }
+                // Reaching here means a `,` that is not part of a number, so
+                // the input mixes locales. Guessing either way would corrupt
+                // the formula silently; say so instead.
+                Decimal::Comma => {
+                    return err(
+                        "',' is the decimal mark in this locale — separate arguments with ';' \
+                         (or set decimal = dot)",
+                        start,
+                    );
+                }
+            }
         } else {
             return err(format!("unexpected character {ch:?}"), start);
         };
@@ -750,11 +836,12 @@ fn split_leading_eq(toks: &[Token]) -> (bool, &[Token]) {
 /// # Errors
 ///
 /// Returns an error if the formula cannot be tokenized or parsed.
-pub fn format(src: &str, width: usize) -> Result<String, Error> {
+pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
+    let width = opts.width;
     if src.trim().is_empty() {
         return Ok(String::new());
     }
-    let toks = tokenize(src)?;
+    let toks = tokenize(src, opts.decimal)?;
     let (eq, rest) = split_leading_eq(&toks);
     let items = parse(rest)?;
 
@@ -780,11 +867,11 @@ pub fn format(src: &str, width: usize) -> Result<String, Error> {
 /// # Errors
 ///
 /// Returns an error if the formula cannot be tokenized or parsed.
-pub fn minify(src: &str) -> Result<String, Error> {
+pub fn minify(src: &str, opts: &Options) -> Result<String, Error> {
     if src.trim().is_empty() {
         return Ok(String::new());
     }
-    let toks = tokenize(src)?;
+    let toks = tokenize(src, opts.decimal)?;
     let (eq, rest) = split_leading_eq(&toks);
     let items = parse(rest)?;
 

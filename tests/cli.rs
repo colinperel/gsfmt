@@ -134,6 +134,60 @@ fn width_precedence_is_flag_then_env_then_config() {
     );
 }
 
+#[test]
+fn decimal_locale_is_selectable_and_defaults_to_dot() {
+    let f = "=SUM(1,5;2,5)\n";
+    assert_eq!(run(&[], &[], f).stdout, "=SUM(1, 5; 2, 5)\n");
+    assert_eq!(
+        run(&["--decimal", "comma"], &[], f).stdout,
+        "=SUM(1,5; 2,5)\n"
+    );
+    assert_eq!(
+        run(&[], &[("GSFMT_DECIMAL", "comma")], f).stdout,
+        "=SUM(1,5; 2,5)\n"
+    );
+    // flag beats env
+    assert_eq!(
+        run(&["--decimal", "dot"], &[("GSFMT_DECIMAL", "comma")], f).stdout,
+        "=SUM(1, 5; 2, 5)\n"
+    );
+}
+
+#[test]
+fn decimal_comes_from_the_config_file_too() {
+    let dir = std::env::temp_dir().join("gsfmt-cli-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let cfg = dir.join("decimal-config");
+    std::fs::write(&cfg, "decimal = comma\n").unwrap();
+    let out = run(
+        &[],
+        &[("GSFMT_CONFIG", cfg.to_str().unwrap())],
+        "=SUM(1,5;2,5)\n",
+    );
+    assert_eq!(out.stdout, "=SUM(1,5; 2,5)\n");
+}
+
+#[test]
+fn a_bad_decimal_value_is_a_usage_error() {
+    let out = run(&["--decimal", "period"], &[], "=SUM(A1)\n");
+    assert_eq!(out.code, 1);
+    assert!(out.stderr.contains("invalid decimal"), "{}", out.stderr);
+
+    let out = run(&[], &[("GSFMT_DECIMAL", "nope")], "=SUM(A1)\n");
+    assert_eq!(out.code, 1);
+    assert!(out.stderr.contains("GSFMT_DECIMAL"), "{}", out.stderr);
+}
+
+/// Mixed-locale input exits 2 with nothing on stdout, so conform surfaces a
+/// format error instead of writing a reinterpreted formula into the buffer.
+#[test]
+fn mixed_locale_input_exits_two_without_output() {
+    let out = run(&["--decimal", "comma"], &[], "=SUM(A1,A2)\n");
+    assert_eq!(out.code, 2);
+    assert!(out.stdout.is_empty(), "stdout was: {}", out.stdout);
+    assert!(out.stderr.contains("decimal mark"), "{}", out.stderr);
+}
+
 /// A malformed width is a usage error, not a silent fall back to the default.
 #[test]
 fn bad_width_values_are_usage_errors() {

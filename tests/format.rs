@@ -11,12 +11,30 @@
 /// these tests are unaffected by whatever config the host machine has.
 const WIDTH: usize = 82;
 
+fn opts(width: usize) -> gsfmt::Options {
+    gsfmt::Options {
+        width,
+        ..gsfmt::Options::default()
+    }
+}
+
+fn comma_opts() -> gsfmt::Options {
+    gsfmt::Options {
+        width: WIDTH,
+        decimal: gsfmt::Decimal::Comma,
+    }
+}
+
 fn fmt(src: &str) -> String {
-    gsfmt::format(src, WIDTH).expect("formats cleanly")
+    gsfmt::format(src, &opts(WIDTH)).expect("formats cleanly")
+}
+
+fn fmt_w(src: &str, width: usize) -> Result<String, gsfmt::Error> {
+    gsfmt::format(src, &opts(width))
 }
 
 fn min(src: &str) -> String {
-    gsfmt::minify(src).expect("minifies cleanly")
+    gsfmt::minify(src, &gsfmt::Options::default()).expect("minifies cleanly")
 }
 
 /// Formulas exercised by every property test below.
@@ -242,11 +260,8 @@ fn long_formulas_break_and_respect_width() {
 #[test]
 fn narrow_width_breaks_more_aggressively() {
     let src = "=IFS(a,1,b,2)";
-    assert_eq!(gsfmt::format(src, 88).unwrap(), "=IFS(a, 1, b, 2)\n");
-    assert_eq!(
-        gsfmt::format(src, 10).unwrap(),
-        "=IFS(\n  a, 1,\n  b, 2\n)\n"
-    );
+    assert_eq!(fmt_w(src, 88).unwrap(), "=IFS(a, 1, b, 2)\n");
+    assert_eq!(fmt_w(src, 10).unwrap(), "=IFS(\n  a, 1,\n  b, 2\n)\n");
 }
 
 #[test]
@@ -254,7 +269,7 @@ fn blank_lines_between_let_groups_are_preserved_never_invented() {
     let grouped = "=LET(\n  alpha, 1,\n\n  beta,  2,\n\n  alpha + beta\n)\n";
     assert_eq!(fmt(grouped), grouped, "author's blank lines must survive");
 
-    let ungrouped = gsfmt::format("=LET(alpha,1,beta,2,alpha+beta)", 12).unwrap();
+    let ungrouped = fmt_w("=LET(alpha,1,beta,2,alpha+beta)", 12).unwrap();
     assert!(
         !ungrouped.contains("\n\n"),
         "blank lines must never be invented: {ungrouped:?}"
@@ -295,7 +310,7 @@ fn argument_separators_are_preserved() {
         ),
     ];
     for (src, want) in cases {
-        assert_eq!(gsfmt::format(src, 14).unwrap(), want, "input: {src}");
+        assert_eq!(fmt_w(src, 14).unwrap(), want, "input: {src}");
     }
     // and the comma locale is untouched
     assert_eq!(fmt("=LET(x,1,x+1)"), "=LET(\n  x, 1,\n  x + 1\n)\n");
@@ -312,13 +327,13 @@ fn separators_survive_a_minify_round_trip() {
 /// to print in full. Documented in `--help` and `dot_config/gsfmt/config`.
 #[test]
 fn an_unbreakable_token_may_exceed_the_width() {
-    let out = gsfmt::format("=SUM(someVeryLongIdentifierName)", 10).unwrap();
+    let out = fmt_w("=SUM(someVeryLongIdentifierName)", 10).unwrap();
     assert!(
         out.lines().any(|l| l.len() > 10),
         "expected an overshooting line:\n{out}"
     );
     // still structurally sound and stable
-    assert_eq!(gsfmt::format(&out, 10).unwrap(), out);
+    assert_eq!(fmt_w(&out, 10).unwrap(), out);
 }
 
 #[test]
@@ -326,6 +341,102 @@ fn empty_input_is_a_no_op() {
     assert_eq!(fmt(""), "");
     assert_eq!(fmt("   \n"), "");
     assert_eq!(min(""), "");
+}
+
+// ─────────────────────────────────────────────────────────────── locale ──
+
+/// In comma-decimal locales (de/fr/es and friends) `1,5` is the number 1.5
+/// and arguments separate with `;`. Treating that `,` as a separator splits
+/// a number in half — and the minify round-trip cannot catch it, because
+/// minifying strips the very spaces that were wrongly inserted. So these
+/// assert exact output.
+#[test]
+fn comma_decimal_numbers_are_never_split() {
+    let o = comma_opts();
+    assert_eq!(
+        gsfmt::format("=SUM(1,5;2,5)", &o).unwrap(),
+        "=SUM(1,5; 2,5)\n"
+    );
+    assert_eq!(
+        gsfmt::format("=IF(A1>0;1,5;2,5)", &o).unwrap(),
+        "=IF(A1 > 0; 1,5; 2,5)\n"
+    );
+    // LET previously misread the bindings entirely
+    assert_eq!(
+        gsfmt::format("=LET(x;1,5;x+1)", &o).unwrap(),
+        "=LET(\n  x; 1,5;\n  x + 1\n)\n"
+    );
+    assert_eq!(
+        gsfmt::minify("=SUM(1,5; 2,5)", &o).unwrap(),
+        "=SUM(1,5;2,5)\n"
+    );
+}
+
+/// A full comma-locale formula, frozen. Reading it under the default dot
+/// locale shifts every LET binding and splits `0,19` into `0` and `19`,
+/// which is why the locale is configuration rather than a guess.
+#[test]
+fn comma_locale_golden_is_a_fixed_point() {
+    let golden = include_str!("data/comma_locale.gsf");
+    let o = gsfmt::Options {
+        width: 60,
+        decimal: gsfmt::Decimal::Comma,
+    };
+    assert_eq!(gsfmt::format(golden, &o).unwrap(), golden);
+    assert!(
+        golden.contains("0,19") && golden.contains("1000,5"),
+        "golden must retain its comma decimals"
+    );
+    // the same bytes under the wrong locale are a different formula
+    assert_ne!(fmt_w(golden, 60).unwrap(), golden);
+}
+
+#[test]
+fn comma_decimal_output_is_idempotent_and_semantics_preserving() {
+    let o = comma_opts();
+    for src in ["=SUM(1,5;2,5)", "=LET(x;1,5;x+1)", "=IF(A1>0;1,5;2,5)"] {
+        let once = gsfmt::format(src, &o).unwrap();
+        assert_eq!(
+            gsfmt::format(&once, &o).unwrap(),
+            once,
+            "not idempotent: {src}"
+        );
+        assert_eq!(
+            gsfmt::minify(&once, &o).unwrap(),
+            gsfmt::minify(src, &o).unwrap(),
+            "semantics changed: {src}"
+        );
+    }
+}
+
+/// The same text means different things in the two locales, which is exactly
+/// why the locale is an explicit input rather than something inferred.
+#[test]
+fn the_two_locales_disagree_about_the_same_text() {
+    assert_eq!(fmt("=SUM(1,5;2,5)"), "=SUM(1, 5; 2, 5)\n");
+    assert_eq!(
+        gsfmt::format("=SUM(1,5;2,5)", &comma_opts()).unwrap(),
+        "=SUM(1,5; 2,5)\n"
+    );
+}
+
+/// A `,` that cannot be part of a number under `Decimal::Comma` means the input
+/// mixes locales. Guessing would silently change what the sheet computes.
+#[test]
+fn mixed_locale_input_is_rejected_not_rewritten() {
+    let o = comma_opts();
+    for src in ["=SUM(1,5,2,5)", "=SUM(A1,A2)", "=LET(x,1,x+1)"] {
+        let e = gsfmt::format(src, &o).expect_err(&format!("should reject {src}"));
+        assert!(e.msg.contains("decimal mark"), "for {src}: {}", e.msg);
+    }
+}
+
+#[test]
+fn a_number_carries_at_most_one_decimal_mark() {
+    // dot locale: `.5` shorthand still works
+    assert_eq!(fmt("=SUM(.5,1.5)"), "=SUM(.5, 1.5)\n");
+    // comma locale: a leading `,5` is a stray separator, not a number
+    assert!(gsfmt::format("=SUM(,5)", &comma_opts()).is_err());
 }
 
 // ─────────────────────────────────────────────────────────────── errors ──
@@ -341,7 +452,7 @@ fn malformed_formulas_are_rejected() {
         ("=SUM(A1) @", "unexpected character"),
     ];
     for (src, needle) in cases {
-        let e = gsfmt::format(src, WIDTH).expect_err(&format!("should reject {src}"));
+        let e = fmt_w(src, WIDTH).expect_err(&format!("should reject {src}"));
         assert!(
             e.msg.contains(needle),
             "for {src:?} wanted {needle:?}, got {:?}",
@@ -352,6 +463,6 @@ fn malformed_formulas_are_rejected() {
 
 #[test]
 fn error_messages_point_at_a_location() {
-    let e = gsfmt::format("=SUM(A1", WIDTH).unwrap_err();
+    let e = fmt_w("=SUM(A1", WIDTH).unwrap_err();
     assert!(e.to_string().contains("character"), "{e}");
 }
