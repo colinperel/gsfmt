@@ -744,3 +744,79 @@ fn error_messages_point_at_a_location() {
     let e = fmt_w("=SUM(A1", WIDTH).unwrap_err();
     assert!(e.to_string().contains("character"), "{e}");
 }
+
+// ─────────────────────────────────────────────────── table references ──
+
+/// A table selector is an opaque atom: everything between the brackets
+/// (spaces, commas, `:` ranges) is selector syntax, not formula syntax,
+/// and survives byte-for-byte. The selector stays glued to the table
+/// name, and the chip-extraction postfix stays glued to the selector.
+#[test]
+fn table_references_survive_verbatim() {
+    let cases = [
+        ("=SUM(Table1[Column 1])", "=SUM(Table1[Column 1])"),
+        ("=COUNTA(Table1[#ALL])", "=COUNTA(Table1[#ALL])"),
+        (
+            "=Table1[[#ALL],[Column 1]:[Column 3]]",
+            "=Table1[[#ALL],[Column 1]:[Column 3]]",
+        ),
+        // chip extraction on a table column
+        (
+            "=Table1[Column 1].[file name]",
+            "=Table1[Column 1].[file name]",
+        ),
+        // chip extraction on a cell reference
+        ("=A1.[email]", "=A1.[email]"),
+        // layout around the reference still normalises
+        (
+            "=SUM(DeptSales[Amount])/COUNTA(DeptSales[Region])",
+            "=SUM(DeptSales[Amount]) / COUNTA(DeptSales[Region])",
+        ),
+    ];
+    for (src, want) in cases {
+        assert_eq!(fmt(src), format!("{want}\n"), "input: {src}");
+        assert_eq!(fmt(&fmt(src)), format!("{want}\n"), "not idempotent: {src}");
+    }
+}
+
+/// Bytes inside the selector are the author's — minify strips whitespace
+/// between tokens, never inside one, so `[[#ALL], [Col 1]]` keeps its
+/// inner space. Deliberate consequence of the opaque-atom design.
+#[test]
+fn minify_does_not_touch_table_selector_bytes() {
+    assert_eq!(min("=SUM( Table1[Column 1] )"), "=SUM(Table1[Column 1])\n");
+    assert_eq!(
+        min("=Table1[[#ALL], [Col 1]]"),
+        "=Table1[[#ALL], [Col 1]]\n"
+    );
+}
+
+/// Selector commas belong to the selector even when `,` is the decimal
+/// mark — the comma-locale guard must not fire inside brackets.
+#[test]
+fn table_selector_commas_are_not_separators_in_comma_locale() {
+    assert_eq!(
+        gsfmt::format("=SUM(Table1[[#ALL],[Col 1]])", &comma_opts()).expect("formats cleanly"),
+        "=SUM(Table1[[#ALL],[Col 1]])\n"
+    );
+}
+
+#[test]
+fn malformed_table_references_are_rejected() {
+    let cases = [
+        ("=SUM(Table1[Column 1", "unterminated table selector"),
+        ("=SUM(Table1[[#ALL],[Col 1]", "unterminated table selector"),
+        // a selector needs a table name in front of it
+        ("=SUM([Column 1])", "unexpected character"),
+        // a stray closing bracket is not silently absorbed
+        ("=SUM(A1])", "unexpected character"),
+    ];
+    for (src, needle) in cases {
+        let e = fmt_w(src, WIDTH).expect_err(&format!("should reject {src}"));
+        assert!(
+            e.msg.contains(needle),
+            "for {src:?} wanted {needle:?}, got {:?}",
+            e.msg
+        );
+    }
+}

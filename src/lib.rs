@@ -262,6 +262,40 @@ pub fn tokenize(src: &str, decimal: Decimal) -> Result<Vec<Token>, Error> {
             while i < c.len() && is_ident_body(c[i]) {
                 i += 1;
             }
+            // Structured table reference — Table1[Column 1], Table1[#ALL],
+            // Table1[[#ALL],[Col 1]:[Col 3]] — and chip extraction, the
+            // `.[field]` postfix (also on cells: A1.[email]). The whole
+            // bracketed selector is swallowed into this atom, bytes
+            // verbatim: inner commas, colons, and spaces are selector
+            // syntax, not formula syntax, so layout must never reflow
+            // them and the comma-locale separator guard must not see
+            // them. The outer `while` glues each `.[field]` postfix (the
+            // ident scan above already consumed the dot of a cell chip,
+            // since `.` is an identifier-body character).
+            while i < c.len() && c[i] == '[' {
+                let open = i;
+                let mut depth = 0usize;
+                while i < c.len() {
+                    match c[i] {
+                        '[' => depth += 1,
+                        ']' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                if i >= c.len() {
+                    return err("unterminated table selector", open);
+                }
+                i += 1;
+                if i + 1 < c.len() && c[i] == '.' && c[i + 1] == '[' {
+                    i += 1;
+                }
+            }
             (c[start..i].iter().collect::<String>(), Kind::Atom)
         } else if i + 1 < c.len() && matches!((ch, c[i + 1]), ('<', '=' | '>') | ('>', '=')) {
             i += 2;
