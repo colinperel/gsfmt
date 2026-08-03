@@ -563,13 +563,39 @@ fn ind(n: usize) -> String {
     " ".repeat(n)
 }
 
+/// A block's width bound. `widest` is the widest line the block could need;
+/// `last` is where its final line ends — the column at which a separator
+/// appended by the caller would land. `last <= widest` always holds.
+#[derive(Clone, Copy)]
+struct MinWidth {
+    widest: usize,
+    last: usize,
+}
+
+impl MinWidth {
+    fn flat(w: usize) -> Self {
+        Self { widest: w, last: w }
+    }
+
+    /// Widest line once `sep` columns are appended to the final line.
+    fn with_sep(self, sep: usize) -> usize {
+        self.widest.max(self.last + sep)
+    }
+}
+
 /// Narrowest width this group could occupy with its body starting at `col` —
 /// the width it would take if every breakable construct broke. Nothing can
 /// make it narrower, so comparing this against the target answers "is the
 /// natural indent hopeless here?" without laying anything out.
-fn min_group_width(g: &Group, col: usize) -> usize {
+///
+/// Every non-final argument carries its separator on the last line of its
+/// block, exactly as `layout_group` appends it — measuring the bare argument
+/// reads one column narrow, and at the edge that one omitted comma is the
+/// difference between clamping and overflowing.
+fn min_group_width(g: &Group, col: usize) -> MinWidth {
     let head = g.head.as_ref().map_or(0, |h| h.text.len()) + g.open.text.len();
-    let widest = (col + head).max(col + g.close.text.len());
+    let last = col + g.close.text.len();
+    let widest = (col + head).max(last);
     let arg_indent = col + INDENT;
 
     // LET/IFS/SWITCH pin each key and its value to the same line, at a column
@@ -579,17 +605,30 @@ fn min_group_width(g: &Group, col: usize) -> usize {
     if !g.is_array() {
         if let Some(lead) = pair_lead(&g.name_upper()) {
             if g.args.len() > lead + 1 {
-                return widest.max(min_pairs_width(g, lead, arg_indent));
+                return MinWidth {
+                    widest: widest.max(min_pairs_width(g, lead, arg_indent)),
+                    last,
+                };
             }
         }
     }
 
-    g.args
-        .iter()
-        .fold(widest, |w, arg| w.max(min_items_width(arg, arg_indent)))
+    let n = g.args.len();
+    let widest = g.args.iter().enumerate().fold(widest, |w, (i, arg)| {
+        let sep = if i + 1 < n { sep_len(g, i) } else { 0 };
+        w.max(min_items_width(arg, arg_indent).with_sep(sep))
+    });
+    MinWidth { widest, last }
 }
 
-/// Minimum width of a pair-aligned body, mirroring `layout_pairs`' columns.
+/// Columns the separator after argument `i` occupies, mirroring the
+/// `sep_after` closures in the layout functions.
+fn sep_len(g: &Group, i: usize) -> usize {
+    g.seps.get(i).map_or(1, |t| t.text.len())
+}
+
+/// Minimum width of a pair-aligned body, mirroring `layout_pairs`' columns —
+/// including the separator each lead argument and non-final pair carries.
 fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize) -> usize {
     let n = g.args.len();
     let pair_count = (n - lead) / 2;
@@ -604,19 +643,25 @@ fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize) -> usize {
 
     let mut widest = arg_indent;
     for i in 0..lead {
-        widest = widest.max(min_items_width(&g.args[i], arg_indent));
+        widest = widest.max(min_items_width(&g.args[i], arg_indent).with_sep(sep_len(g, i)));
     }
     for p in 0..pair_count {
         let ki = key_of(p);
+        let vi = ki + 1;
         let value_col = if aligned {
             arg_indent + widest_key + 2
         } else {
             arg_indent + keys[p].len() + 2
         };
-        widest = widest.max(min_items_width(&g.args[ki + 1], value_col));
+        let sep = if p + 1 == pair_count && !has_tail {
+            0
+        } else {
+            sep_len(g, vi)
+        };
+        widest = widest.max(min_items_width(&g.args[vi], value_col).with_sep(sep));
     }
     if has_tail {
-        widest = widest.max(min_items_width(&g.args[n - 1], arg_indent));
+        widest = widest.max(min_items_width(&g.args[n - 1], arg_indent).widest);
     }
     widest
 }
@@ -628,7 +673,7 @@ fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize) -> usize {
 /// as separately placeable underestimates badly: `sheet!$AA:$AA` is five
 /// tokens joined by tight operators that can never be split, and measuring
 /// them individually reported 80 columns for something that needs 88.
-fn min_items_width(items: &[Node], col: usize) -> usize {
+fn min_items_width(items: &[Node], col: usize) -> MinWidth {
     let ops = binary_op_positions(items);
     let Some(&first) = ops.first() else {
         return min_chunk_width(items, col);
@@ -642,32 +687,43 @@ fn min_items_width(items: &[Node], col: usize) -> usize {
     // indent — and the bound comes in short, skipping a clamp the emitted
     // line needed.
     let cont = col + INDENT;
-    let mut widest = min_chunk_width(&items[..first], col);
+    let mut widest = min_chunk_width(&items[..first], col).widest;
+    let mut last = 0;
     for (n, &start) in ops.iter().enumerate() {
         let end = ops.get(n + 1).copied().unwrap_or(items.len());
         let Node::Leaf(op) = &items[start] else {
             unreachable!("op position is a leaf")
         };
         let operand_col = cont + op.text.len() + 1;
-        widest = widest.max(min_chunk_width(&items[start + 1..end], operand_col));
+        let m = min_chunk_width(&items[start + 1..end], operand_col);
+        widest = widest.max(m.widest);
+        last = m.last;
     }
-    widest
+    MinWidth { widest, last }
 }
 
 /// Narrowest width for one unbreakable run. Its leading tokens must all sit
 /// on one line; only a trailing group can open out, and at best its body is
-/// clamped back to `col + INDENT`.
-fn min_chunk_width(items: &[Node], col: usize) -> usize {
+/// clamped back to `col + INDENT`. Anything after that group rides on its
+/// closing line, so it widens both the bound and the final-line column.
+fn min_chunk_width(items: &[Node], col: usize) -> MinWidth {
     let (inline, offs) = render_inline(items, false);
     let Some(gi) = items.iter().rposition(|n| matches!(n, Node::Group(_))) else {
-        return col + inline.len();
+        return MinWidth::flat(col + inline.len());
     };
     let Node::Group(g) = &items[gi] else {
         unreachable!("rposition matched a group")
     };
     let head = g.head.as_ref().map_or(0, |h| h.text.len()) + g.open.text.len();
+    let glen = render_group_inline(g, false).len();
+    let suffix = inline.len() - offs[gi] - glen;
     // The opening line is unavoidable; the body can at best be clamped.
-    (col + offs[gi] + head).max(min_group_width(g, col + INDENT))
+    let body = min_group_width(g, col + INDENT);
+    let last = body.last + suffix;
+    MinWidth {
+        widest: (col + offs[gi] + head).max(body.widest).max(last),
+        last,
+    }
 }
 
 /// `LET`/`IFS`/`SWITCH` bind (key, value) pairs that read best one pair per
@@ -821,14 +877,13 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
     // editor freeze on save.
     let start_col = indent + prefix.len();
     let clamped = indent + INDENT;
-    let body = if clamped < start_col
-        && min_group_width(g, start_col) > width
-        && min_group_width(g, clamped) < min_group_width(g, start_col)
-    {
-        clamped
-    } else {
-        start_col
-    };
+    let natural = min_group_width(g, start_col).widest;
+    let body =
+        if clamped < start_col && natural > width && min_group_width(g, clamped).widest < natural {
+            clamped
+        } else {
+            start_col
+        };
     let mut lines = layout_group(g, start_col, body, width, force);
     lines[0] = format!("{prefix}{}", lines[0]);
     if !suffix.is_empty() {

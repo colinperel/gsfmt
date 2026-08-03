@@ -566,6 +566,35 @@ fn the_width_bound_accounts_for_operator_continuations() {
     }
 }
 
+/// The width bound has to count the separator a non-final argument carries:
+/// `layout_group` appends `,` to the last line of every argument block but
+/// the final one. Measuring the bare argument reads one column narrow, and
+/// exactly at the edge the clamp is skipped for a line that then overflows
+/// by that one omitted comma.
+#[test]
+fn the_width_bound_accounts_for_argument_separators() {
+    for sheet_len in 24..=30 {
+        let sheet = "S".repeat(sheet_len);
+        for arg_len in 40..=50 {
+            let arg = "a".repeat(arg_len);
+            for src in [
+                format!("={sheet}!$A$3:INDEX({arg}, 1)"),
+                format!("=LET(q, {sheet}!$A$3:INDEX({arg}, 1), q)"),
+            ] {
+                let out = fmt(&src);
+                for line in out.lines() {
+                    assert!(
+                        line.len() <= WIDTH,
+                        "avoidable overflow at sheet_len={sheet_len} \
+                         arg_len={arg_len} ({} cols):\n{out}",
+                        line.len()
+                    );
+                }
+            }
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────── locale ──
 
 /// In comma-decimal locales (de/fr/es and friends) `1,5` is the number 1.5
