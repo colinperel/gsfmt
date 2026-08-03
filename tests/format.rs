@@ -6,7 +6,10 @@
 //! is a corrupted formula, so those get dedicated tests rather than relying
 //! on the golden files to notice.
 
-const WIDTH: usize = 88;
+/// Matches the binary's built-in default (src/main.rs) and the shipped
+/// `dot_config/gsfmt/config`. The library takes width as a parameter, so
+/// these tests are unaffected by whatever config the host machine has.
+const WIDTH: usize = 82;
 
 fn fmt(src: &str) -> String {
     gsfmt::format(src, WIDTH).expect("formats cleanly")
@@ -22,6 +25,8 @@ const CORPUS: &[&str] = &[
     include_str!("data/payperiods.min.gsf"),
     include_str!("data/gnarly.gsf"),
     include_str!("data/gnarly.min.gsf"),
+    include_str!("data/monthly.gsf"),
+    include_str!("data/monthly.min.gsf"),
     "=LET(x,1,x+1)",
     "=IF(x = \"\", , y)",
     "=FILTER(D6:D, B6:B <> \"\")",
@@ -83,6 +88,27 @@ fn gnarly_minify_round_trips_to_its_golden() {
     let golden = include_str!("data/gnarly.gsf");
     assert_eq!(min(golden), include_str!("data/gnarly.min.gsf"));
     assert_eq!(fmt(include_str!("data/gnarly.min.gsf")), golden);
+}
+
+/// A real 60-line production formula: nested LAMBDAs, MAP/SCAN/MMULT,
+/// `B6:INDEX(...)` open ranges, sheet-qualified refs, and two blank
+/// arguments. Exercises the layout at a depth the smaller goldens do not.
+#[test]
+fn monthly_golden_is_a_fixed_point() {
+    let golden = include_str!("data/monthly.gsf");
+    assert_eq!(fmt(golden), golden);
+}
+
+#[test]
+fn monthly_minify_round_trips() {
+    let golden = include_str!("data/monthly.gsf");
+    assert_eq!(min(golden), include_str!("data/monthly.min.gsf"));
+    let mut flattened = String::new();
+    for line in golden.lines().filter(|l| !l.trim().is_empty()) {
+        flattened.push_str(line);
+        flattened.push('\n');
+    }
+    assert_eq!(fmt(include_str!("data/monthly.min.gsf")), flattened);
 }
 
 // ───────────────────────────────────────────────────────────── property ──
@@ -232,6 +258,26 @@ fn blank_lines_between_let_groups_are_preserved_never_invented() {
     assert!(
         !ungrouped.contains("\n\n"),
         "blank lines must never be invented: {ungrouped:?}"
+    );
+}
+
+/// A blank argument holds no text, so a broken call must hang it off the
+/// previous line rather than stranding a lone `,` on one of its own.
+#[test]
+fn a_blank_argument_never_owns_a_line() {
+    let src = "=LAMBDA(d, IF(d = \"\", , SUMPRODUCT((checkIns <= d) * (checkOuts > d), values)))";
+    let out = fmt(src);
+    assert!(
+        out.contains("d = \"\", ,"),
+        "blank arg should ride the previous line:\n{out}"
+    );
+    for line in out.lines() {
+        assert_ne!(line.trim(), ",", "stranded blank argument:\n{out}");
+    }
+    // trailing blank argument, as in ARRAYFORMULA(IF(cond, values, ))
+    assert_eq!(
+        fmt("=IF(nightsRaw>0,values,)"),
+        "=IF(nightsRaw > 0, values, )\n"
     );
 }
 

@@ -625,6 +625,20 @@ fn layout_group(g: &Group, indent: usize, width: usize, force: bool) -> Vec<Stri
     };
 
     for i in start..laid.len() {
+        // A blank argument carries no text, so giving it a line of its own
+        // leaves a stranded `,`. Hang it off the previous line instead:
+        // `IF(\n  d = \"\", ,\n  SUMPRODUCT(...)\n)`.
+        if g.args[i].is_empty() {
+            if let Some(prev) = lines.last_mut() {
+                if !prev.ends_with(&g.open.text) {
+                    prev.push(' ');
+                }
+                if i + 1 < laid.len() {
+                    prev.push_str(sep_after(i));
+                }
+                continue;
+            }
+        }
         let mut block = laid[i].clone();
         block[0] = format!("{}{}", ind(arg_indent), block[0]);
         if i + 1 < laid.len() {
