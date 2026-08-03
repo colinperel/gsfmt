@@ -29,12 +29,22 @@ fn run(args: &[&str], env: &[(&str, &str)], stdin: &str) -> Out {
         cmd.env(k, v);
     }
     let mut child = cmd.spawn().expect("spawn gsfmt");
-    child
+    // A usage error (bad flag, second FILE) makes gsfmt exit before it ever
+    // reads stdin, so this write races the child's exit and can land on a
+    // closed pipe. That is expected here and says nothing about the binary;
+    // any other write error still fails the test.
+    if let Err(e) = child
         .stdin
         .take()
         .expect("stdin")
         .write_all(stdin.as_bytes())
-        .expect("write stdin");
+    {
+        assert_eq!(
+            e.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "unexpected error writing stdin: {e}"
+        );
+    }
     let out = child.wait_with_output().expect("wait");
     Out {
         code: out.status.code().expect("exit code"),
