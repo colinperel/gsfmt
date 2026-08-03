@@ -838,6 +838,13 @@ fn binary_op_positions(items: &[Node]) -> Vec<usize> {
 /// every later line carries its full absolute indent.
 ///
 /// `force` suppresses only the inline shortcut at *this* level.
+///
+/// Known one-column gap, accepted in PR #64 review: the inline fit test
+/// below cannot see a separator the *caller* will append to this block's
+/// last line, so an argument landing exactly at `width` stays inline and
+/// the comma lands one column past it. Fixing it means threading the
+/// pending-separator width into every fit decision; do that if it ever
+/// bites in practice.
 fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec<String> {
     let (inline, offs) = render_inline(items, false);
     if !force && !contains_authored_grouping(items) && indent + inline.len() <= width {
