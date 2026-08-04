@@ -101,7 +101,9 @@ fn err<T>(msg: impl Into<String>, pos: usize) -> Result<T, Error> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
-    /// Number, name, cell/range reference, `'quoted sheet'`, or `#REF!`.
+    /// Number, name, cell/range reference, `'quoted sheet'`, `#REF!`, or a
+    /// name glued to a table selector / chip field (`Table1[Column 1]`,
+    /// `A1.[email]`) — the selector bytes ride inside the token.
     Atom,
     /// `"..."` string literal, stored with its quotes and `""` escapes intact.
     Str,
@@ -272,6 +274,11 @@ pub fn tokenize(src: &str, decimal: Decimal) -> Result<Vec<Token>, Error> {
             // them. The outer `while` glues each `.[field]` postfix (the
             // ident scan above already consumed the dot of a cell chip,
             // since `.` is an identifier-body character).
+            //
+            // Only balance and termination are checked — selector *shape*
+            // (empty `[]`, a specifier in chip position) is not. The
+            // grammar rejects those; a formatter preserves them, same
+            // contract split as the `\` tolerance note in grammar.js.
             while i < c.len() && c[i] == '[' {
                 let open = i;
                 let mut depth = 0usize;

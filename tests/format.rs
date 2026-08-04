@@ -57,6 +57,7 @@ const CORPUS: &[&str] = &[
     "='my sheet'!A1:B2",
     "=stock_data!P3",
     "=SWITCH(A1, 1, \"one\", 2, \"two\", \"other\")",
+    "=SUM(Table1[Column 1].[file name]) + COUNTA(T2[[#ALL],[Col 1]:[Col 2]])",
     "=MAP(A1:A9, LAMBDA(v, IF(v <> \"\", v * 2, \"\")))",
     "=NOW()",
 ];
@@ -818,5 +819,28 @@ fn malformed_table_references_are_rejected() {
             "for {src:?} wanted {needle:?}, got {:?}",
             e.msg
         );
+    }
+}
+
+/// Deliberate: gsfmt does not validate selector shape. The grammar
+/// (tools/tree-sitter-gsformula) rejects `Table1[]` and friends with an
+/// ERROR node — that is a highlighter's contract. A formatter's is the
+/// opposite: never crash on garbage, only preserve it (see the identifier
+/// note in grammar.js). gsfmt checks what layout needs — balance and
+/// termination — not whether the selector is semantically valid, exactly
+/// as it accepts calls to functions that do not exist. `Table1.[x]` also
+/// cannot be told apart from the valid cell chip `A1.[email]` lexically.
+#[test]
+fn selector_shape_is_preserved_not_validated() {
+    let cases = [
+        "=SUM(Table1[])",
+        "=Table1[[#ALL],[]]",
+        "=Table1[Column 1].[]",
+        "=Table1[Column 1].[#ALL]",
+        "=Table1[#ALL].[file name]",
+        "=Table1.[file name]",
+    ];
+    for src in cases {
+        assert_eq!(fmt(src), format!("{src}\n"), "input: {src}");
     }
 }
