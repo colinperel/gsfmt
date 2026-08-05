@@ -39,12 +39,12 @@ fn min(src: &str) -> String {
 
 /// Formulas exercised by every property test below.
 const CORPUS: &[&str] = &[
-    include_str!("data/payperiods.gsf"),
-    include_str!("data/payperiods.min.gsf"),
-    include_str!("data/gnarly.gsf"),
-    include_str!("data/gnarly.min.gsf"),
-    include_str!("data/monthly.gsf"),
-    include_str!("data/monthly.min.gsf"),
+    include_str!("data/payperiods.gsfx"),
+    include_str!("data/payperiods.min.gsfx"),
+    include_str!("data/gnarly.gsfx"),
+    include_str!("data/gnarly.min.gsfx"),
+    include_str!("data/monthly.gsfx"),
+    include_str!("data/monthly.min.gsfx"),
     "=LET(x,1,x+1)",
     "=IF(x = \"\", , y)",
     "=FILTER(D6:D, B6:B <> \"\")",
@@ -66,7 +66,7 @@ const CORPUS: &[&str] = &[
 
 #[test]
 fn payperiods_golden_is_a_fixed_point() {
-    let golden = include_str!("data/payperiods.gsf");
+    let golden = include_str!("data/payperiods.gsfx");
     assert_eq!(
         fmt(golden),
         golden,
@@ -77,8 +77,8 @@ fn payperiods_golden_is_a_fixed_point() {
 #[test]
 fn payperiods_minifies_to_its_golden() {
     assert_eq!(
-        min(include_str!("data/payperiods.gsf")),
-        include_str!("data/payperiods.min.gsf")
+        min(include_str!("data/payperiods.gsfx")),
+        include_str!("data/payperiods.min.gsfx")
     );
 }
 
@@ -87,26 +87,26 @@ fn payperiods_minifies_to_its_golden() {
 /// some third layout.
 #[test]
 fn payperiods_minify_then_format_matches_golden_without_blank_lines() {
-    let golden = include_str!("data/payperiods.gsf");
+    let golden = include_str!("data/payperiods.gsfx");
     let mut flattened = String::new();
     for line in golden.lines().filter(|l| !l.trim().is_empty()) {
         flattened.push_str(line);
         flattened.push('\n');
     }
-    assert_eq!(fmt(include_str!("data/payperiods.min.gsf")), flattened);
+    assert_eq!(fmt(include_str!("data/payperiods.min.gsfx")), flattened);
 }
 
 #[test]
 fn gnarly_golden_is_a_fixed_point() {
-    let golden = include_str!("data/gnarly.gsf");
+    let golden = include_str!("data/gnarly.gsfx");
     assert_eq!(fmt(golden), golden);
 }
 
 #[test]
 fn gnarly_minify_round_trips_to_its_golden() {
-    let golden = include_str!("data/gnarly.gsf");
-    assert_eq!(min(golden), include_str!("data/gnarly.min.gsf"));
-    assert_eq!(fmt(include_str!("data/gnarly.min.gsf")), golden);
+    let golden = include_str!("data/gnarly.gsfx");
+    assert_eq!(min(golden), include_str!("data/gnarly.min.gsfx"));
+    assert_eq!(fmt(include_str!("data/gnarly.min.gsfx")), golden);
 }
 
 /// A real 60-line production formula: nested LAMBDAs, MAP/SCAN/MMULT,
@@ -114,20 +114,20 @@ fn gnarly_minify_round_trips_to_its_golden() {
 /// arguments. Exercises the layout at a depth the smaller goldens do not.
 #[test]
 fn monthly_golden_is_a_fixed_point() {
-    let golden = include_str!("data/monthly.gsf");
+    let golden = include_str!("data/monthly.gsfx");
     assert_eq!(fmt(golden), golden);
 }
 
 #[test]
 fn monthly_minify_round_trips() {
-    let golden = include_str!("data/monthly.gsf");
-    assert_eq!(min(golden), include_str!("data/monthly.min.gsf"));
+    let golden = include_str!("data/monthly.gsfx");
+    assert_eq!(min(golden), include_str!("data/monthly.min.gsfx"));
     let mut flattened = String::new();
     for line in golden.lines().filter(|l| !l.trim().is_empty()) {
         flattened.push_str(line);
         flattened.push('\n');
     }
-    assert_eq!(fmt(include_str!("data/monthly.min.gsf")), flattened);
+    assert_eq!(fmt(include_str!("data/monthly.min.gsfx")), flattened);
 }
 
 // ───────────────────────────────────────────────────────────── property ──
@@ -250,7 +250,7 @@ fn let_always_breaks_however_short() {
 
 #[test]
 fn long_formulas_break_and_respect_width() {
-    let src = include_str!("data/payperiods.gsf");
+    let src = include_str!("data/payperiods.gsfx");
     let out = fmt(src);
     assert!(out.lines().count() > 20, "expected a broken layout");
     for line in out.lines() {
@@ -656,7 +656,7 @@ fn comma_decimal_numbers_are_never_split() {
 /// which is why the locale is configuration rather than a guess.
 #[test]
 fn comma_locale_golden_is_a_fixed_point() {
-    let golden = include_str!("data/comma_locale.gsf");
+    let golden = include_str!("data/comma_locale.gsfx");
     let o = gsfmt::Options {
         width: 60,
         decimal: gsfmt::Decimal::Comma,

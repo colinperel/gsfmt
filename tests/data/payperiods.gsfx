@@ -1,0 +1,23 @@
+=LET(
+  targetYear, B1,
+  nextYear,   DATE(targetYear + 1, 1, 1),
+  firstDay,   DATE(targetYear, 1, 1),
+  firstMon,   firstDay + MOD(8 - WEEKDAY(firstDay, 2), 7),
+  audit,      DATE(targetYear, 10, 1),
+  auditSun,   audit - MOD(WEEKDAY(audit, 2), 7),
+  freeze,     auditSun - 21,
+  winEnd,     LAMBDA(start,
+                LET(
+                  endReg, start + 13,
+                  IFS(
+                    endReg >= nextYear,                    nextYear - 1,
+                    AND(endReg >= freeze, start < freeze), freeze - 1,
+                    TRUE,                                  endReg
+                  )
+                )
+              ),
+  starts,     SEQUENCE(27, 1, firstMon, 14),
+  ends,       MAP(starts, winEnd),
+  valid,      ARRAYFORMULA(starts < nextYear),
+  HSTACK(FILTER(starts, valid), FILTER(ends, valid))
+)

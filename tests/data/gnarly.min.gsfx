@@ -1,0 +1,1 @@
+=LET(raw,FILTER(intake_log!E4:E,intake_log!C4:C<>""),label,"subtotal (rounded), excl. fees",rate,4.25%,fallback,IF(COUNTA(raw)=0,,SUM(raw)),IFS(COUNTA(raw)=0,"no rows",SUM(raw)>9^99,"overflow",TRUE,TEXT(SUM(raw)*(1+rate),"0.00")&" "&label))

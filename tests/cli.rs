@@ -86,8 +86,8 @@ fn minify_collapses_to_one_line() {
 fn a_second_file_argument_is_rejected() {
     let dir = std::env::temp_dir().join("gsfmt-cli-test");
     std::fs::create_dir_all(&dir).unwrap();
-    let a = dir.join("a.gsf");
-    let b = dir.join("b.gsf");
+    let a = dir.join("a.gsfx");
+    let b = dir.join("b.gsfx");
     std::fs::write(&a, "=SUM(A1)\n").unwrap();
     std::fs::write(&b, "=SUM(B2)\n").unwrap();
 
