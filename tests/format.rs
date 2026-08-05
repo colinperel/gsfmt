@@ -823,10 +823,10 @@ fn malformed_table_references_are_rejected() {
 }
 
 /// Deliberate: gsfmt does not validate selector shape. The grammar
-/// (tools/tree-sitter-gsformula) rejects `Table1[]` and friends with an
+/// (github.com/colinperel/tree-sitter-gsformula) rejects `Table1[]` and friends with an
 /// ERROR node — that is a highlighter's contract. A formatter's is the
 /// opposite: never crash on garbage, only preserve it (see the identifier
-/// note in grammar.js). gsfmt checks what layout needs — balance and
+/// note in that repo's grammar.js). gsfmt checks what layout needs — balance and
 /// termination — not whether the selector is semantically valid, exactly
 /// as it accepts calls to functions that do not exist. `Table1.[x]` also
 /// cannot be told apart from the valid cell chip `A1.[email]` lexically.
