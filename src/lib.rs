@@ -679,31 +679,30 @@ fn min_group_width(g: &Group, col: usize) -> MinWidth {
     // A blank argument gets no block of its own: layout hangs its
     // punctuation off the previous line (`, ,`), so its columns accumulate
     // onto the preceding block's final-line figure — or onto the opening
-    // line when the group starts blank.
+    // line when the group starts blank. A final blank argument appends
+    // nothing (layout drops even the joining space), so it counts nothing.
     let n = g.args.len();
     let mut widest = widest;
     let mut idx = 0;
     let mut open_line = col + head;
     while idx < n && g.args[idx].is_empty() {
-        if idx > 0 {
-            open_line += 1;
-        }
         if idx + 1 < n {
+            if idx > 0 {
+                open_line += 1;
+            }
             open_line += sep_len(g, idx);
         }
         idx += 1;
     }
     widest = widest.max(open_line);
     while idx < n {
-        // This argument's separator, plus every blank argument hanging off
-        // its final line (a joining space each, and all but a final blank's
-        // separator).
+        // This argument's separator, plus every non-final blank argument
+        // hanging off its final line (a joining space and a separator each).
         let mut end_cols = if idx + 1 < n { sep_len(g, idx) } else { 0 };
         let mut j = idx + 1;
         while j < n && g.args[j].is_empty() {
-            end_cols += 1;
             if j + 1 < n {
-                end_cols += sep_len(g, j);
+                end_cols += 1 + sep_len(g, j);
             }
             j += 1;
         }
@@ -1070,13 +1069,17 @@ fn layout_group(
     for i in start..laid.len() {
         // A blank argument carries no text, so giving it a line of its own
         // leaves a stranded `,`. Hang it off the previous line instead:
-        // `IF(\n  d = \"\", ,\n  SUMPRODUCT(...)\n)`.
+        // `IF(\n  d = \"\", ,\n  SUMPRODUCT(...)\n)`. A *final* blank
+        // argument appends nothing at all — the line already ends with the
+        // previous argument's separator, which re-parses to the same blank,
+        // and the joining space would be trailing whitespace for editors to
+        // strip and re-add forever.
         if g.args[i].is_empty() {
             if let Some(prev) = lines.last_mut() {
-                if !prev.ends_with(&g.open.text) {
-                    prev.push(' ');
-                }
                 if i + 1 < laid.len() {
+                    if !prev.ends_with(&g.open.text) {
+                        prev.push(' ');
+                    }
                     prev.push_str(sep_after(i));
                 }
                 continue;
@@ -1217,7 +1220,16 @@ pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
     if eq {
         out.push('=');
     }
-    out.push_str(&lines.join("\n"));
+    // Trailing whitespace on a line is never a token (nothing follows it on
+    // that line), so trimming it is a pure whitespace change — and it keeps
+    // pair layouts with blank values (`LET(a, 1, x,)` pads the missing
+    // value) from emitting lines that end in spaces.
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(line.trim_end());
+    }
     out.push('\n');
     Ok(out)
 }
