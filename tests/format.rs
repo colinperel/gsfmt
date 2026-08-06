@@ -314,6 +314,39 @@ fn a_blank_argument_never_owns_a_line() {
     );
 }
 
+/// No emitted line ever ends in whitespace: editors that strip trailing
+/// whitespace on save must not fight the formatter, so gsfmt output has to
+/// be a fixed point under that hygiene too, at every width.
+#[test]
+fn no_line_ever_ends_with_whitespace() {
+    for src in CORPUS {
+        for w in [10, 30, WIDTH] {
+            let out = fmt_w(src, w).expect("formats cleanly");
+            for line in out.lines() {
+                assert_eq!(
+                    line,
+                    line.trim_end(),
+                    "trailing whitespace at width {w} for {src}:\n{out}"
+                );
+            }
+        }
+    }
+}
+
+/// A *final* blank argument in a broken layout appends nothing: the line
+/// already ends with the previous argument's separator, which re-parses to
+/// the same blank. (Inline, the tested `values, )` shape is unchanged.)
+#[test]
+fn a_trailing_blank_argument_leaves_no_trailing_space() {
+    assert_eq!(
+        fmt_w("=IF(someLongCondition, someValue,)", 20).unwrap(),
+        "=IF(\n  someLongCondition,\n  someValue,\n)\n"
+    );
+    // pair layout pads a blank value with alignment spaces; they must not
+    // survive to the end of the line
+    assert_eq!(fmt("=LET(a,1,x,)"), "=LET(\n  a, 1,\n  x,\n)\n");
+}
+
 /// Sheets uses `;` as the argument separator in many locales. Swapping it
 /// for `,` is not a whitespace change — it corrupts the formula. Pair layout
 /// (LET/IFS/SWITCH) previously hardcoded commas.
