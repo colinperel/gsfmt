@@ -1,10 +1,12 @@
 //! Behaviour tests for the formatter.
 //!
 //! The contract under test is narrow and load-bearing: only whitespace
-//! *outside* string literals may change. Anything else — a dropped paren, a
-//! blank argument turned into `""`, a renormalised number, a case change —
-//! is a corrupted formula, so those get dedicated tests rather than relying
-//! on the golden files to notice.
+//! *outside* string literals may change, plus exactly one sanctioned token
+//! rewrite — dot-locale `;` argument separators normalize to `,`, as the
+//! Sheets editor itself does. Anything else — a dropped paren, a blank
+//! argument turned into `""`, a renormalised number, a case change — is a
+//! corrupted formula, so those get dedicated tests rather than relying on
+//! the golden files to notice.
 
 /// Matches the binary's built-in default (src/main.rs). The library takes
 /// width as a parameter, so these tests are unaffected by whatever config
