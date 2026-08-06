@@ -18,10 +18,15 @@
 //! change is whitespace between tokens. A blank argument is simply an
 //! argument holding zero tokens; a redundant paren group is a node;
 //! identifier case and string bytes are copied verbatim.
+//!
+//! One sanctioned exception: in the dot locale, `;` argument separators
+//! are rewritten to `,` — exactly what the Sheets editor itself does on
+//! entry (see [`normalize_separators`]). Array row separators are
+//! semantic and stay untouched.
 
 use std::fmt;
 
-/// Default target line width. See `dot_config/gsfmt/config` for why 82.
+/// Default target line width; see the README's Configuration section.
 pub const DEFAULT_WIDTH: usize = 82;
 
 /// Which character is the decimal mark — and therefore what `,` means.
@@ -504,6 +509,32 @@ fn first_token(items: &[Node]) -> Option<&Token> {
     match items.first()? {
         Node::Leaf(t) => Some(t),
         Node::Group(g) => Some(g.head.as_ref().unwrap_or(&g.open)),
+    }
+}
+
+/// Rewrite `;` argument separators to `,` inside calls and paren groups.
+///
+/// Sheets itself accepts `;` between arguments in the dot locale and
+/// rewrites it to `,` the moment the formula is entered; gsfmt mirrors
+/// that. This is the one sanctioned exception to "token bytes are copied
+/// verbatim". Array row separators are semantic — `{1;2}` is a column,
+/// `{1,2}` a row — so array groups keep theirs, and under
+/// [`Decimal::Comma`] nothing is touched because `;` is the only argument
+/// separator there.
+fn normalize_separators(items: &mut [Node]) {
+    for node in items {
+        if let Node::Group(g) = node {
+            if !g.is_array() {
+                for sep in &mut g.seps {
+                    if sep.text == ";" {
+                        sep.text = ",".into();
+                    }
+                }
+            }
+            for arg in &mut g.args {
+                normalize_separators(arg);
+            }
+        }
     }
 }
 
@@ -1229,7 +1260,10 @@ pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
     }
     let toks = tokenize(src, opts.decimal)?;
     let (eq, rest) = split_leading_eq(&toks);
-    let items = parse(rest)?;
+    let mut items = parse(rest)?;
+    if opts.decimal == Decimal::Dot {
+        normalize_separators(&mut items);
+    }
 
     let lead = usize::from(eq);
     let inline = render_inline(&items, false).0;
@@ -1268,7 +1302,10 @@ pub fn minify(src: &str, opts: &Options) -> Result<String, Error> {
     }
     let toks = tokenize(src, opts.decimal)?;
     let (eq, rest) = split_leading_eq(&toks);
-    let items = parse(rest)?;
+    let mut items = parse(rest)?;
+    if opts.decimal == Decimal::Dot {
+        normalize_separators(&mut items);
+    }
 
     let mut out = String::new();
     if eq {

@@ -348,23 +348,46 @@ fn a_trailing_blank_argument_leaves_no_trailing_space() {
     assert_eq!(fmt("=LET(a,1,x,)"), "=LET(\n  a, 1,\n  x,\n)\n");
 }
 
-/// Sheets uses `;` as the argument separator in many locales. Swapping it
-/// for `,` is not a whitespace change — it corrupts the formula. Pair layout
-/// (LET/IFS/SWITCH) previously hardcoded commas.
+/// Sheets accepts `;` between arguments in the dot locale and rewrites it
+/// to `,` the moment the formula is entered; gsfmt mirrors that — the one
+/// sanctioned token rewrite. Array row separators are semantic (`{1;2}` is
+/// a column, `{1,2}` a row) and are never touched.
 #[test]
-fn argument_separators_are_preserved() {
-    let cases = [
-        ("=LET(x;1;x+1)", "=LET(\n  x; 1;\n  x + 1\n)\n"),
-        ("=IFS(a;1;b;2)", "=IFS(\n  a; 1;\n  b; 2\n)\n"),
-        (
-            "=SWITCH(v;1;\"one\";2;\"two\")",
-            "=SWITCH(\n  v;\n  1; \"one\";\n  2; \"two\"\n)\n",
-        ),
-    ];
-    for (src, want) in cases {
-        assert_eq!(fmt_w(src, 14).unwrap(), want, "input: {src}");
-    }
-    // and the comma locale is untouched
+fn dot_locale_normalizes_semicolon_argument_separators() {
+    assert_eq!(fmt("=SUM(1;2)"), "=SUM(1, 2)\n");
+    assert_eq!(min("=SUM(1;2)"), "=SUM(1,2)\n");
+    assert_eq!(
+        fmt_w("=LET(x;1;x+1)", 14).unwrap(),
+        "=LET(\n  x, 1,\n  x + 1\n)\n"
+    );
+    assert_eq!(
+        fmt_w("=SWITCH(v;1;\"one\";2;\"two\")", 14).unwrap(),
+        "=SWITCH(\n  v,\n  1, \"one\",\n  2, \"two\"\n)\n"
+    );
+    // array rows keep their `;`, including inside normalized calls
+    assert_eq!(fmt("=SUM({1,2;3,4})"), "=SUM({1, 2; 3, 4})\n");
+    assert_eq!(fmt("={1;2}"), "={1; 2}\n");
+    assert_eq!(min("={1; 2}"), "={1;2}\n");
+}
+
+/// Under `Decimal::Comma` the `;` is the only argument separator there is,
+/// so it round-trips untouched — swapping it there would corrupt the
+/// formula. Pair layout (LET/IFS/SWITCH) previously hardcoded commas.
+#[test]
+fn comma_locale_argument_separators_are_preserved() {
+    let o = gsfmt::Options {
+        width: 14,
+        decimal: gsfmt::Decimal::Comma,
+    };
+    assert_eq!(
+        gsfmt::format("=LET(x;1;x+1)", &o).unwrap(),
+        "=LET(\n  x; 1;\n  x + 1\n)\n"
+    );
+    assert_eq!(
+        gsfmt::format("=IFS(a;1;b;2)", &o).unwrap(),
+        "=IFS(\n  a; 1;\n  b; 2\n)\n"
+    );
+    // and the default dot locale still emits commas
     assert_eq!(fmt("=LET(x,1,x+1)"), "=LET(\n  x, 1,\n  x + 1\n)\n");
 }
 
@@ -773,7 +796,7 @@ fn comma_decimal_output_is_idempotent_and_semantics_preserving() {
 /// why the locale is an explicit input rather than something inferred.
 #[test]
 fn the_two_locales_disagree_about_the_same_text() {
-    assert_eq!(fmt("=SUM(1,5;2,5)"), "=SUM(1, 5; 2, 5)\n");
+    assert_eq!(fmt("=SUM(1,5;2,5)"), "=SUM(1, 5, 2, 5)\n");
     assert_eq!(
         gsfmt::format("=SUM(1,5;2,5)", &comma_opts()).unwrap(),
         "=SUM(1,5; 2,5)\n"

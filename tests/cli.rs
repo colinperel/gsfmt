@@ -166,7 +166,8 @@ fn width_precedence_is_flag_then_env_then_config() {
 #[test]
 fn decimal_locale_is_selectable_and_defaults_to_dot() {
     let f = "=SUM(1,5;2,5)\n";
-    assert_eq!(run(&[], &[], f).stdout, "=SUM(1, 5; 2, 5)\n");
+    // dot locale reads four arguments and normalizes the `;` to `,`
+    assert_eq!(run(&[], &[], f).stdout, "=SUM(1, 5, 2, 5)\n");
     assert_eq!(
         run(&["--decimal", "comma"], &[], f).stdout,
         "=SUM(1,5; 2,5)\n"
@@ -178,7 +179,7 @@ fn decimal_locale_is_selectable_and_defaults_to_dot() {
     // flag beats env
     assert_eq!(
         run(&["--decimal", "dot"], &[("GSFMT_DECIMAL", "comma")], f).stdout,
-        "=SUM(1, 5; 2, 5)\n"
+        "=SUM(1, 5, 2, 5)\n"
     );
 }
 
