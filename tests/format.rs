@@ -61,6 +61,7 @@ const CORPUS: &[&str] = &[
     "=MAP(A1:A9, LAMBDA(v, IF(v <> \"\", v * 2, \"\")))",
     "=NOW()",
     "=A1 B1",
+    "=IF(näme <> \"\", \"héllo, wörld\", ééé)",
 ];
 
 // ─────────────────────────────────────────────────────────────── golden ──
@@ -670,6 +671,36 @@ fn the_width_bound_accounts_for_blank_argument_hangs() {
             }
         }
     }
+}
+
+// ────────────────────────────────────────────────────────────── unicode ──
+
+/// Width is measured in characters, not bytes. A multibyte formula that
+/// fits within the width must stay inline — measuring bytes made a 61-char
+/// formula look 111 columns wide and broke it across four lines.
+#[test]
+fn multibyte_content_is_measured_in_characters() {
+    let s = "é".repeat(50);
+    let src = format!("=IF(x, \"{s}\")");
+    assert!(src.chars().count() <= WIDTH, "test premise: fits in chars");
+    let out = fmt(&src);
+    assert_eq!(
+        out.lines().count(),
+        1,
+        "premature break on multibyte content:\n{out}"
+    );
+}
+
+/// Pair alignment pads to a column, and a column is a character count: a
+/// multibyte key must land its value on the same visual column as its
+/// ASCII neighbours, not the same byte count.
+#[test]
+fn multibyte_let_keys_align_their_values_by_column() {
+    let out = fmt("=LET(éé,1,aaaa,2,éé+aaaa)");
+    let col = |line: &str, ch: char| line.chars().position(|c| c == ch);
+    let l1 = out.lines().nth(1).expect("key line");
+    let l2 = out.lines().nth(2).expect("key line");
+    assert_eq!(col(l1, '1'), col(l2, '2'), "values misaligned:\n{out}");
 }
 
 // ─────────────────────────────────────────────────────────────── locale ──

@@ -526,6 +526,8 @@ fn guard_minified(out: &mut String, next: &str) {
 }
 
 /// Render a sequence on one line, also reporting where each item starts.
+/// The reported offsets are *byte* offsets into the returned string — meant
+/// for slicing; measure the slices with [`cols`] for column arithmetic.
 fn render_inline(items: &[Node], minify: bool) -> (String, Vec<usize>) {
     let mut out = String::new();
     let mut offs = Vec::with_capacity(items.len());
@@ -626,6 +628,23 @@ fn ind(n: usize) -> String {
     " ".repeat(n)
 }
 
+/// Display width of a rendered fragment, in characters.
+///
+/// Layout arithmetic must never use byte length: multibyte content —
+/// strings, Unicode names, quoted sheet names — would measure wider than it
+/// displays and break lines far too early, and pair alignment would pad in
+/// bytes and land values on crooked columns. Characters are still an
+/// approximation (a combining mark or a double-width CJK glyph counts as
+/// one column), but the error is small and consistent, and doing better
+/// needs Unicode width tables this dependency-free crate deliberately
+/// avoids.
+///
+/// Byte offsets (as returned by `render_inline`) remain the right tool for
+/// *slicing*; this is only for column arithmetic.
+fn cols(s: &str) -> usize {
+    s.chars().count()
+}
+
 /// A block's width bound. `widest` is the widest line the block could need;
 /// `last` is where its final line ends — the column at which a separator
 /// appended by the caller would land. `last <= widest` always holds.
@@ -656,8 +675,8 @@ impl MinWidth {
 /// reads one column narrow, and at the edge that one omitted comma is the
 /// difference between clamping and overflowing.
 fn min_group_width(g: &Group, col: usize) -> MinWidth {
-    let head = g.head.as_ref().map_or(0, |h| h.text.len()) + g.open.text.len();
-    let last = col + g.close.text.len();
+    let head = g.head.as_ref().map_or(0, |h| cols(&h.text)) + cols(&g.open.text);
+    let last = col + cols(&g.close.text);
     let widest = (col + head).max(last);
     let arg_indent = col + INDENT;
 
@@ -715,7 +734,7 @@ fn min_group_width(g: &Group, col: usize) -> MinWidth {
 /// Columns the separator after argument `i` occupies, mirroring the
 /// `sep_after` closures in the layout functions.
 fn sep_len(g: &Group, i: usize) -> usize {
-    g.seps.get(i).map_or(1, |t| t.text.len())
+    g.seps.get(i).map_or(1, |t| cols(&t.text))
 }
 
 /// Minimum width of a pair-aligned body, mirroring `layout_pairs`' columns —
@@ -729,7 +748,7 @@ fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize) -> usize {
     let keys: Vec<String> = (0..pair_count)
         .map(|p| render_inline(&g.args[key_of(p)], false).0)
         .collect();
-    let widest_key = keys.iter().map(String::len).max().unwrap_or(0);
+    let widest_key = keys.iter().map(|k| cols(k)).max().unwrap_or(0);
     let aligned = widest_key + 2 <= ALIGN_MAX;
 
     let mut widest = arg_indent;
@@ -742,7 +761,7 @@ fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize) -> usize {
         let value_col = if aligned {
             arg_indent + widest_key + 2
         } else {
-            arg_indent + keys[p].len() + 2
+            arg_indent + cols(&keys[p]) + 2
         };
         let sep = if p + 1 == pair_count && !has_tail {
             0
@@ -785,7 +804,7 @@ fn min_items_width(items: &[Node], col: usize) -> MinWidth {
         let Node::Leaf(op) = &items[start] else {
             unreachable!("op position is a leaf")
         };
-        let operand_col = cont + op.text.len() + 1;
+        let operand_col = cont + cols(&op.text) + 1;
         let m = min_chunk_width(&items[start + 1..end], operand_col);
         widest = widest.max(m.widest);
         last = m.last;
@@ -800,19 +819,22 @@ fn min_items_width(items: &[Node], col: usize) -> MinWidth {
 fn min_chunk_width(items: &[Node], col: usize) -> MinWidth {
     let (inline, offs) = render_inline(items, false);
     let Some(gi) = items.iter().rposition(|n| matches!(n, Node::Group(_))) else {
-        return MinWidth::flat(col + inline.len());
+        return MinWidth::flat(col + cols(&inline));
     };
     let Node::Group(g) = &items[gi] else {
         unreachable!("rposition matched a group")
     };
-    let head = g.head.as_ref().map_or(0, |h| h.text.len()) + g.open.text.len();
+    let head = g.head.as_ref().map_or(0, |h| cols(&h.text)) + cols(&g.open.text);
+    // `offs` and the rendered group length are byte offsets: slice with
+    // them, then measure the slices in columns.
     let glen = render_group_inline(g, false).len();
-    let suffix = inline.len() - offs[gi] - glen;
+    let prefix = cols(&inline[..offs[gi]]);
+    let suffix = cols(&inline[offs[gi] + glen..]);
     // The opening line is unavoidable; the body can at best be clamped.
     let body = min_group_width(g, col + INDENT);
     let last = body.last + suffix;
     MinWidth {
-        widest: (col + offs[gi] + head).max(body.widest).max(last),
+        widest: (col + prefix + head).max(body.widest).max(last),
         last,
     }
 }
@@ -909,7 +931,7 @@ fn binary_op_positions(items: &[Node]) -> Vec<usize> {
 /// bites in practice.
 fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec<String> {
     let (inline, offs) = render_inline(items, false);
-    if !force && !contains_authored_grouping(items) && indent + inline.len() <= width {
+    if !force && !contains_authored_grouping(items) && indent + cols(&inline) <= width {
         return vec![inline];
     }
 
@@ -924,7 +946,7 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
     // across lines because of that would be gratuitous, and it also strips
     // the very grouping that forced the break.
     let ops = binary_op_positions(items);
-    if indent + inline.len() > width && !ops.is_empty() {
+    if indent + cols(&inline) > width && !ops.is_empty() {
         let cont = indent + INDENT;
         let mut lines = layout_items(&items[..ops[0]], indent, width, false);
         for (n, &start) in ops.iter().enumerate() {
@@ -934,7 +956,7 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
             };
             let operand = &items[start + 1..end];
             let head = format!("{}{} ", ind(cont), op.text);
-            let mut block = layout_items(operand, head.len(), width, false);
+            let mut block = layout_items(operand, cols(&head), width, false);
             block[0] = format!("{head}{}", block[0]);
             lines.extend(block);
         }
@@ -950,6 +972,7 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
         unreachable!("rposition matched a group")
     };
 
+    // Byte offsets slice; columns measure.
     let prefix = inline[..offs[gi]].to_string();
     let glen = render_group_inline(g, false).len();
     let suffix = inline[offs[gi] + glen..].to_string();
@@ -973,7 +996,7 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
     // prefixed groups that each run their own two trials, doubling per
     // level. It reached ~5s on a depth-20 formula of 624 bytes, which is an
     // editor freeze on save.
-    let start_col = indent + prefix.len();
+    let start_col = indent + cols(&prefix);
     let clamped = indent + INDENT;
     let natural = min_group_width(g, start_col).widest;
     let body =
@@ -1003,7 +1026,7 @@ fn layout_group(
     force: bool,
 ) -> Vec<String> {
     let inline = render_group_inline(g, false);
-    if !force && !group_forces_break(g) && start_col + inline.len() <= width {
+    if !force && !group_forces_break(g) && start_col + cols(&inline) <= width {
         return vec![inline];
     }
     if g.is_empty_call() {
@@ -1053,7 +1076,7 @@ fn layout_group(
                 head_line.push_str(&laid[i][0]);
                 head_line.push_str(sep_after(i));
             }
-            (start_col + head_line.len() <= width).then_some((k, head_line))
+            (start_col + cols(&head_line) <= width).then_some((k, head_line))
         }
         _ => None,
     };
@@ -1117,7 +1140,7 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
         .map(|p| render_inline(&g.args[key_of(p)], false).0)
         .collect();
 
-    let widest = keys.iter().map(String::len).max().unwrap_or(0);
+    let widest = keys.iter().map(|k| cols(k)).max().unwrap_or(0);
     let aligned = widest + 2 <= ALIGN_MAX;
     let value_col = arg_indent + if aligned { widest + 2 } else { 0 };
 
@@ -1155,10 +1178,10 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
         let col = if aligned {
             value_col
         } else {
-            arg_indent + key.len() + 2
+            arg_indent + cols(key) + 2
         };
         let pad = col
-            .saturating_sub(arg_indent + key.len() + key_sep.len())
+            .saturating_sub(arg_indent + cols(key) + cols(key_sep))
             .max(1);
 
         let mut block = layout_items(&g.args[vi], col, width, false);
@@ -1210,7 +1233,7 @@ pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
 
     let lead = usize::from(eq);
     let inline = render_inline(&items, false).0;
-    let lines = if !contains_authored_grouping(&items) && lead + inline.len() <= width {
+    let lines = if !contains_authored_grouping(&items) && lead + cols(&inline) <= width {
         vec![inline]
     } else {
         layout_items(&items, 0, width, true)
