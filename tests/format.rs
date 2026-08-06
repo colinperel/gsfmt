@@ -60,6 +60,7 @@ const CORPUS: &[&str] = &[
     "=SUM(Table1[Column 1].[file name]) + COUNTA(T2[[#ALL],[Col 1]:[Col 2]])",
     "=MAP(A1:A9, LAMBDA(v, IF(v <> \"\", v * 2, \"\")))",
     "=NOW()",
+    "=A1 B1",
 ];
 
 // ─────────────────────────────────────────────────────────────── golden ──
@@ -213,6 +214,22 @@ fn only_whitespace_changes() {
     for (src, want) in cases {
         assert_eq!(fmt(src), format!("{want}\n"), "input: {src}");
     }
+}
+
+/// Adjacent operand tokens are never valid Sheets syntax (there is no
+/// space-intersection operator), so the formatter's job is to preserve the
+/// two tokens, not to fuse them: glued, `A1 B1` re-lexes as one atom and
+/// `"a" "b"` re-lexes as a *single* string with an escaped quote — both are
+/// token changes, not whitespace changes. Groups still glue to what precedes
+/// them, because `LAMBDA(x, x)(1000)` is a real invocation.
+#[test]
+fn adjacent_operands_never_fuse() {
+    assert_eq!(fmt("=A1 B1"), "=A1 B1\n");
+    assert_eq!(min("=A1 B1"), "=A1 B1\n");
+    assert_eq!(min("=A1   B1"), "=A1 B1\n");
+    assert_eq!(min("=\"a\" \"b\""), "=\"a\" \"b\"\n");
+    assert_eq!(fmt("=LAMBDA(x, x)(1000)"), "=LAMBDA(x, x)(1000)\n");
+    assert_eq!(min("=LAMBDA(x, x)(1000)"), "=LAMBDA(x,x)(1000)\n");
 }
 
 #[test]
