@@ -62,6 +62,10 @@ const CORPUS: &[&str] = &[
     "=NOW()",
     "=A1 B1",
     "=IF(näme <> \"\", \"héllo, wörld\", ééé)",
+    // a real newline inside a string is content, not layout (no trailing
+    // space before it — that would trip the trailing-whitespace invariant,
+    // which cannot see token boundaries)
+    "=IF(A1, \"line one\nline two\", \"x\")",
 ];
 
 // ─────────────────────────────────────────────────────────────── golden ──
@@ -159,11 +163,24 @@ fn formatting_preserves_semantics() {
     }
 }
 
+/// Minify collapses layout to one line — but a newline *inside* a string
+/// literal is content (Sheets accepts multi-line strings via Alt+Enter),
+/// so the invariant is "no newlines outside string tokens", not "one line".
 #[test]
-fn minify_output_is_a_single_line() {
+fn minify_emits_no_newlines_outside_string_literals() {
     for src in CORPUS {
         let out = min(src);
-        assert_eq!(out.matches('\n').count(), 1, "not one line: {src}");
+        let toks = gsfmt::tokenize(&out, gsfmt::Decimal::Dot).expect("re-tokenizes");
+        let inside: usize = toks
+            .iter()
+            .filter(|t| t.kind == gsfmt::Kind::Str)
+            .map(|t| t.text.matches('\n').count())
+            .sum();
+        assert_eq!(
+            out.matches('\n').count(),
+            inside + 1,
+            "newline outside a string: {src}"
+        );
         assert!(out.ends_with('\n'));
     }
 }

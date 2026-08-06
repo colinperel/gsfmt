@@ -15,7 +15,8 @@ USAGE:
     Reads stdin when FILE is absent or `-`. Writes to stdout.
 
 OPTIONS:
-    -m, --minify        Collapse the formula onto a single line
+    -m, --minify        Collapse the formula onto a single line (a newline
+                        inside a string literal is content and survives)
     -w, --width <N>     Target line width before breaking
     -d, --decimal <K>   Decimal mark: `dot` (1.5, args by `,`) or
                         `comma` (1,5, args by `;`). Default: dot
