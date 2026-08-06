@@ -61,6 +61,10 @@ const BINOPS: &[&str] = &[
 
 const HEADS: &[&str] = &["SUM", "IF", "IFS", "LET", "SWITCH", "LAMBDA", "X.Y", "sum"];
 
+/// Generated formulas per run. Enough to cover every generator arm many
+/// times over; small enough to keep the suite fast.
+const CASES: usize = 400;
+
 fn gen_expr(rng: &mut Rng, depth: usize) -> String {
     if depth >= 5 {
         return ATOMS[rng.below(ATOMS.len())].to_string();
@@ -111,7 +115,6 @@ fn gen_expr(rng: &mut Rng, depth: usize) -> String {
 fn generated_formulas_hold_every_invariant() {
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
     let mut skipped = 0usize;
-    const CASES: usize = 400;
 
     for i in 0..CASES {
         let src = format!("={}", gen_expr(&mut rng, 0));
