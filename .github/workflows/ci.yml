@@ -25,3 +25,37 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+
+  # Cargo.toml declares rust-version = "1.74"; verify it actually builds
+  # there. Lints are skipped on purpose — clippy's pedantic set drifts
+  # between releases, and the stable job above already enforces it.
+  msrv:
+    name: MSRV (1.74)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup toolchain install 1.74 --profile minimal
+      - run: cargo +1.74 test --locked
+
+  # tests/data/ goldens are canonical; tree-sitter-gsformula mirrors six of
+  # them as examples/. Fail loudly when the copies drift.
+  fixtures:
+    name: Fixture sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        with:
+          repository: colinperel/tree-sitter-gsformula
+          path: grammar
+      - run: |
+          status=0
+          for f in gnarly gnarly.min monthly monthly.min payperiods payperiods.min; do
+            if ! diff -u "tests/data/$f.gsfx" "grammar/examples/$f.gsfx"; then
+              status=1
+            fi
+          done
+          if [ "$status" -ne 0 ]; then
+            echo "::error::fixtures drifted — tests/data/ (this repo) is canonical; sync tree-sitter-gsformula examples/ to match"
+          fi
+          exit "$status"
