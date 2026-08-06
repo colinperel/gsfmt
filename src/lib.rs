@@ -569,7 +569,16 @@ fn render_inline(items: &[Node], minify: bool) -> (String, Vec<usize>) {
                 }
             }
             _ => {
-                if pending_space {
+                // Two operand tokens with nothing between them (`A1 B1`,
+                // `"a" "b"`) keep a separating space in both modes: gluing
+                // them merges tokens on re-lex — `A1B1` is one atom, and
+                // `"a""b"` even re-lexes as a single string with an escaped
+                // quote. Sheets rejects such input (it has no space-
+                // intersection operator), so this is preservation of
+                // garbage, not endorsement. Groups stay glued to whatever
+                // precedes them: `LAMBDA(x, x)(1000)` is a real invocation.
+                let leaf_operand = matches!(node, Node::Leaf(_));
+                if pending_space || (leaf_operand && prev_operand) {
                     out.push(' ');
                 }
                 let s = match node {
