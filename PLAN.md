@@ -1,5 +1,9 @@
 # gsfmt / tree-sitter-gsformula — Remediation Plan
 
+> **Executed 2026-08-06** — all items shipped via gsfmt#1 and
+> tree-sitter-gsformula#1, except P15 (deliberately skipped: the P1 depth cap
+> bounds the cost) and the P10-optional `\p{Nd}` tightening (left as `\p{N}`).
+
 Source: full technical review of both repos (2026-08-05). Each item below is
 self-contained: an implementing agent needs only this file plus the repo.
 Items are independent unless a **Depends on** line says otherwise. Do the
