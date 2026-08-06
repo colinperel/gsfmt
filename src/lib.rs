@@ -73,6 +73,15 @@ const INDENT: usize = 2;
 /// space so one long name cannot shove every value off the screen.
 const ALIGN_MAX: usize = 40;
 
+/// Groups nested deeper than this are rejected at parse time. Real formulas
+/// nest shallowly — the fixtures peak around ten levels, the deepest
+/// regression test uses forty. The cap exists because parsing recurses per
+/// level (unbounded depth overflows the stack around ten thousand) and
+/// layout cost grows super-linearly with depth, so a hostile paren tower
+/// could hang an editor on save. Two hundred keeps the worst case well
+/// under half a second.
+const MAX_DEPTH: usize = 200;
+
 // ───────────────────────────────────────────────────────────── errors ──
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -398,10 +407,10 @@ impl Group {
 ///
 /// # Errors
 ///
-/// Returns an error for unbalanced or mismatched brackets, or a stray
-/// closing bracket.
+/// Returns an error for unbalanced or mismatched brackets, a stray closing
+/// bracket, or nesting deeper than [`MAX_DEPTH`] levels.
 pub fn parse(toks: &[Token]) -> Result<Vec<Node>, Error> {
-    let (items, next) = parse_items(toks, 0)?;
+    let (items, next) = parse_items(toks, 0, 0)?;
     if next < toks.len() {
         let t = &toks[next];
         return err(format!("unexpected {:?}", t.text), t.pos);
@@ -409,13 +418,13 @@ pub fn parse(toks: &[Token]) -> Result<Vec<Node>, Error> {
     Ok(items)
 }
 
-fn parse_items(toks: &[Token], mut i: usize) -> Result<(Vec<Node>, usize), Error> {
+fn parse_items(toks: &[Token], mut i: usize, depth: usize) -> Result<(Vec<Node>, usize), Error> {
     let mut out = Vec::new();
     while i < toks.len() {
         match toks[i].kind {
             Kind::Sep | Kind::Close => break,
             Kind::Open => {
-                let (g, ni) = parse_group(toks, i, None)?;
+                let (g, ni) = parse_group(toks, i, None, depth)?;
                 out.push(Node::Group(g));
                 i = ni;
             }
@@ -424,7 +433,7 @@ fn parse_items(toks: &[Token], mut i: usize) -> Result<(Vec<Node>, usize), Error
                     && toks[i + 1].kind == Kind::Open
                     && toks[i + 1].text == "(" =>
             {
-                let (g, ni) = parse_group(toks, i + 1, Some(toks[i].clone()))?;
+                let (g, ni) = parse_group(toks, i + 1, Some(toks[i].clone()), depth)?;
                 out.push(Node::Group(g));
                 i = ni;
             }
@@ -441,15 +450,19 @@ fn parse_group(
     toks: &[Token],
     open_i: usize,
     head: Option<Token>,
+    depth: usize,
 ) -> Result<(Group, usize), Error> {
     let open = toks[open_i].clone();
+    if depth >= MAX_DEPTH {
+        return err(format!("nesting exceeds {MAX_DEPTH} levels"), open.pos);
+    }
     let closer = if open.text == "(" { ")" } else { "}" };
     let mut args = Vec::new();
     let mut seps = Vec::new();
     let mut i = open_i + 1;
 
     loop {
-        let (items, ni) = parse_items(toks, i)?;
+        let (items, ni) = parse_items(toks, i, depth + 1)?;
         args.push(items);
         i = ni;
 

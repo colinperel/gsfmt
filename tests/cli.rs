@@ -116,6 +116,18 @@ fn an_unparseable_formula_exits_two_without_writing_output() {
     assert!(out.stderr.contains("unbalanced"), "{}", out.stderr);
 }
 
+/// Nesting past the parser's depth cap is an ordinary parse failure — exit 2
+/// with nothing on stdout — never a stack-overflow abort that conform would
+/// surface as a crashed formatter.
+#[test]
+fn deeply_nested_input_exits_two_without_output() {
+    let deep = format!("={}1{}\n", "(".repeat(300), ")".repeat(300));
+    let out = run(&[], &[], &deep);
+    assert_eq!(out.code, 2, "stdout was: {}", out.stdout);
+    assert!(out.stdout.is_empty(), "stdout was: {}", out.stdout);
+    assert!(out.stderr.contains("nesting"), "{}", out.stderr);
+}
+
 #[test]
 fn width_precedence_is_flag_then_env_then_config() {
     // 54 chars: fits at 82, breaks at 40.

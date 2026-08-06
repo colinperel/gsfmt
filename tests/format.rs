@@ -746,6 +746,27 @@ fn error_messages_point_at_a_location() {
     assert!(e.to_string().contains("character"), "{e}");
 }
 
+/// Parsing recurses per nesting level, so unbounded depth used to overflow
+/// the stack (a hard abort, not an error) around ten thousand levels, and
+/// layout cost grows super-linearly with depth — a hostile paren tower hung
+/// the formatter long before that. The cap turns both into an ordinary
+/// parse error while sitting far above any real formula.
+#[test]
+fn nesting_beyond_the_cap_is_rejected_not_fatal() {
+    let deep = format!("={}1{}", "(".repeat(201), ")".repeat(201));
+    let e = fmt_w(&deep, WIDTH).expect_err("should reject depth 201");
+    assert!(e.msg.contains("nesting"), "{}", e.msg);
+
+    let ok = format!("={}1{}", "(".repeat(199), ")".repeat(199));
+    let start = std::time::Instant::now();
+    assert!(fmt_w(&ok, WIDTH).is_ok(), "depth 199 must still format");
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "formatting at the depth cap took {elapsed:?}"
+    );
+}
+
 // ─────────────────────────────────────────────────── table references ──
 
 /// A table selector is an opaque atom: everything between the brackets
