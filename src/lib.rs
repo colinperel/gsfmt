@@ -949,8 +949,11 @@ fn binary_op_positions(items: &[Node]) -> Vec<usize> {
     out
 }
 
-/// Lay out a sequence. Line 0 carries no indent (the caller places it);
-/// every later line carries its full absolute indent.
+/// Lay out a sequence. Line 0 carries no indent (the caller places it at
+/// `start_col` — the leading `=` at top level, or the argument indent);
+/// every later line carries its full absolute indent, derived from
+/// `indent`. The two differ only at the top level, where `=` occupies a
+/// column that is not indentation.
 ///
 /// `force` suppresses only the inline shortcut at *this* level.
 ///
@@ -960,9 +963,15 @@ fn binary_op_positions(items: &[Node]) -> Vec<usize> {
 /// the comma lands one column past it. Fixing it means threading the
 /// pending-separator width into every fit decision; do that if it ever
 /// bites in practice.
-fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec<String> {
+fn layout_items(
+    items: &[Node],
+    start_col: usize,
+    indent: usize,
+    width: usize,
+    force: bool,
+) -> Vec<String> {
     let (inline, offs) = render_inline(items, false);
-    if !force && !contains_authored_grouping(items) && indent + cols(&inline) <= width {
+    if !force && !contains_authored_grouping(items) && start_col + cols(&inline) <= width {
         return vec![inline];
     }
 
@@ -977,9 +986,9 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
     // across lines because of that would be gratuitous, and it also strips
     // the very grouping that forced the break.
     let ops = binary_op_positions(items);
-    if indent + cols(&inline) > width && !ops.is_empty() {
+    if start_col + cols(&inline) > width && !ops.is_empty() {
         let cont = indent + INDENT;
-        let mut lines = layout_items(&items[..ops[0]], indent, width, false);
+        let mut lines = layout_items(&items[..ops[0]], start_col, indent, width, false);
         for (n, &start) in ops.iter().enumerate() {
             let end = ops.get(n + 1).copied().unwrap_or(items.len());
             let Node::Leaf(op) = &items[start] else {
@@ -987,7 +996,7 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
             };
             let operand = &items[start + 1..end];
             let head = format!("{}{} ", ind(cont), op.text);
-            let mut block = layout_items(operand, cols(&head), width, false);
+            let mut block = layout_items(operand, cols(&head), cols(&head), width, false);
             block[0] = format!("{head}{}", block[0]);
             lines.extend(block);
         }
@@ -1027,16 +1036,23 @@ fn layout_items(items: &[Node], indent: usize, width: usize, force: bool) -> Vec
     // prefixed groups that each run their own two trials, doubling per
     // level. It reached ~5s on a depth-20 formula of 624 bytes, which is an
     // editor freeze on save.
-    let start_col = indent + cols(&prefix);
+    // The group's opening line begins at `group_col` (which includes the
+    // `=` column at top level); its body indents from `indent` (which does
+    // not — `=` is a column, not indentation, and the close bracket must
+    // stay on the indent grid).
+    let group_col = start_col + cols(&prefix);
+    let natural_body = indent + cols(&prefix);
     let clamped = indent + INDENT;
-    let natural = min_group_width(g, start_col).widest;
-    let body =
-        if clamped < start_col && natural > width && min_group_width(g, clamped).widest < natural {
-            clamped
-        } else {
-            start_col
-        };
-    let mut lines = layout_group(g, start_col, body, width, force);
+    let natural = min_group_width(g, group_col).widest;
+    let body = if clamped < natural_body
+        && natural > width
+        && min_group_width(g, clamped).widest < natural
+    {
+        clamped
+    } else {
+        natural_body
+    };
+    let mut lines = layout_group(g, group_col, body, width, force);
     lines[0] = format!("{prefix}{}", lines[0]);
     if !suffix.is_empty() {
         let last = lines.len() - 1;
@@ -1086,7 +1102,7 @@ fn layout_group(
             if a.is_empty() {
                 vec![String::new()]
             } else {
-                layout_items(a, arg_indent, width, force_arg_break(g, i))
+                layout_items(a, arg_indent, arg_indent, width, force_arg_break(g, i))
             }
         })
         .collect();
@@ -1196,7 +1212,7 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
     };
 
     for i in 0..lead {
-        let mut block = layout_items(&g.args[i], arg_indent, width, false);
+        let mut block = layout_items(&g.args[i], arg_indent, arg_indent, width, false);
         block[0] = format!("{}{}", ind(arg_indent), block[0]);
         emit(&mut lines, block, &g.args[i], sep_after(i));
     }
@@ -1215,7 +1231,7 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
             .saturating_sub(arg_indent + cols(key) + cols(key_sep))
             .max(1);
 
-        let mut block = layout_items(&g.args[vi], col, width, false);
+        let mut block = layout_items(&g.args[vi], col, col, width, false);
         block[0] = format!("{}{key}{key_sep}{}{}", ind(arg_indent), ind(pad), block[0]);
         let last = !has_tail && p + 1 == pair_count;
         emit(
@@ -1228,7 +1244,7 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
 
     if has_tail {
         let i = n - 1;
-        let mut block = layout_items(&g.args[i], arg_indent, width, false);
+        let mut block = layout_items(&g.args[i], arg_indent, arg_indent, width, false);
         block[0] = format!("{}{}", ind(arg_indent), block[0]);
         emit(&mut lines, block, &g.args[i], "");
     }
@@ -1270,7 +1286,8 @@ pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
     let lines = if !contains_authored_grouping(&items) && lead + cols(&inline) <= width {
         vec![inline]
     } else {
-        layout_items(&items, 0, width, true)
+        // Line 0 starts after the `=`, which is a column but not indent.
+        layout_items(&items, lead, 0, width, true)
     };
 
     let mut out = String::new();

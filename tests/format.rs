@@ -850,6 +850,23 @@ fn error_messages_point_at_a_location() {
     assert!(e.to_string().contains("character"), "{e}");
 }
 
+/// The leading `=` occupies a column of line 0 even though it is not
+/// indentation. Fit decisions used to ignore it, so a first line landing
+/// exactly at the width overshot by one avoidable column.
+#[test]
+fn the_leading_equals_counts_against_the_width() {
+    let out = fmt_w("=SUM(abcde) + e", 10).unwrap();
+    for line in out.lines() {
+        assert!(
+            line.len() <= 10,
+            "avoidable overflow ({} cols): {line:?}\n{out}",
+            line.len()
+        );
+    }
+    // and without the `=` the same body may use the full width
+    assert_eq!(fmt_w("SUM(abcdef)", 11).unwrap(), "SUM(abcdef)\n");
+}
+
 /// Parsing recurses per nesting level, so unbounded depth used to overflow
 /// the stack (a hard abort, not an error) around ten thousand levels, and
 /// layout cost grows super-linearly with depth — a hostile paren tower hung
