@@ -1295,7 +1295,10 @@ fn split_leading_eq(toks: &[Token]) -> (bool, &[Token]) {
 
 /// Format a formula across as many lines as readability wants.
 ///
-/// Only whitespace between tokens changes; token text is copied verbatim.
+/// Only whitespace between tokens changes; token text is copied verbatim,
+/// with one sanctioned exception — in the dot locale, `;` argument
+/// separators normalize to `,` (see [`normalize_separators`]). A newline
+/// inside a string literal is content and survives untouched.
 ///
 /// # Errors
 ///
@@ -1339,7 +1342,12 @@ pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
     Ok(out)
 }
 
-/// Collapse a formula onto a single line.
+/// Collapse a formula's layout onto a single line.
+///
+/// A newline inside a string literal is content, not layout, and is
+/// preserved — such a formula minifies to more than one physical line.
+/// Dot-locale `;` argument separators normalize to `,` here too, so
+/// `minify` and [`format`] always agree on token text.
 ///
 /// # Errors
 ///
