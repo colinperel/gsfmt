@@ -6,9 +6,9 @@
 //! is a corrupted formula, so those get dedicated tests rather than relying
 //! on the golden files to notice.
 
-/// Matches the binary's built-in default (src/main.rs) and the shipped
-/// `dot_config/gsfmt/config`. The library takes width as a parameter, so
-/// these tests are unaffected by whatever config the host machine has.
+/// Matches the binary's built-in default (src/main.rs). The library takes
+/// width as a parameter, so these tests are unaffected by whatever config
+/// the host machine has.
 const WIDTH: usize = 82;
 
 fn opts(width: usize) -> gsfmt::Options {
@@ -416,7 +416,7 @@ fn separators_survive_a_minify_round_trip() {
 }
 
 /// Width is a target, not a hard ceiling: a token that cannot be split has
-/// to print in full. Documented in `--help` and `dot_config/gsfmt/config`.
+/// to print in full. Documented in `--help`.
 #[test]
 fn an_unbreakable_token_may_exceed_the_width() {
     let out = fmt_w("=SUM(someVeryLongIdentifierName)", 10).unwrap();
