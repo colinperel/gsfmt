@@ -38,7 +38,9 @@ DECIMAL:
     inferred from the text -- a US `{1,2;3,4}` already contains both
     characters. Under `comma`, `1,5` is one number and arguments separate
     with `;`; a `,` used as a separator is an error rather than a silent
-    rewrite. Resolved like width: --decimal, then $GSFMT_DECIMAL, then
+    rewrite. Under `dot`, a `;` between arguments is normalized to `,`,
+    as Sheets itself does on entry (array rows keep their `;`). Resolved
+    like width: --decimal, then $GSFMT_DECIMAL, then
     `decimal = <dot|comma>` in the config file.
 
 EXIT CODES:

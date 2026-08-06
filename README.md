@@ -13,9 +13,12 @@ gsfmt --width 100 -          # format stdin at width 100
 ```
 
 Formatting is idempotent (formatting formatted output is a no-op) and
-byte-preserving for content: only whitespace changes, never tokens.
-Table references (`Table1[Column 1]`, `.[chip]` postfixes) are treated
-as opaque atoms — laid out but never reflowed internally.
+byte-preserving for content: only whitespace changes, never tokens —
+with one exception: in the dot locale, `;` argument separators are
+normalized to `,`, exactly what the Sheets editor does on entry (array
+row separators like `{1;2}` are untouched). Table references
+(`Table1[Column 1]`, `.[chip]` postfixes) are treated as opaque atoms —
+laid out but never reflowed internally.
 
 ## Configuration
 
