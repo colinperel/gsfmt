@@ -47,9 +47,8 @@ for the grammar and editor queries). In Neovim, wire gsfmt as the
 `gsformula` formatter in conform.nvim, or just `:%!gsfmt`.
 
 The editor grammar is dot-locale only and stricter than the
-formatter: comma-locale input (and, until the grammar catches up,
-some syntax gsfmt accepts) may highlight as an error in the buffer
-even though gsfmt formats it fine.
+formatter: comma-locale input may highlight as an error in the
+buffer even though gsfmt formats it fine.
 
 ## Development
 

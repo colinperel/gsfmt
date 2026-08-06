@@ -271,8 +271,9 @@ pin down.
      the `DEFAULT_WIDTH` doc comment itself if it isn't recorded anywhere
      reachable.
   3. gsfmt README: one sentence noting the editor grammar is dot-locale-only
-     and stricter than the formatter (`;` separators, Unicode names may
-     highlight as errors until P8 ships) so the disagreement is documented.
+     and stricter than the formatter (comma-locale input may highlight as an
+     error) so the disagreement is documented. (P8 shipped Unicode names, so
+     the divergence is locale-only now.)
 - **Acceptance**: `grep -rn dot_config src tests README.md` empty; both
   suites green (comment-only changes).
 
@@ -422,6 +423,7 @@ cargo test --locked
 tree-sitter generate && git status --short src/   # regenerated src/ must be committed
 tree-sitter test
 for f in examples/*.gsfx; do tree-sitter parse "$f" 2>/dev/null | grep -cE 'ERROR|MISSING'; done  # all zeros
+cargo test   # NOT --locked: the grammar repo gitignores Cargo.lock, so a fresh worktree has none
 
 # smoke (gsfmt, after building release)
 python3 -c "print('='+'('*50000+'1'+')'*50000)" | target/release/gsfmt --minify -; echo "exit=$? (want 2 after P1)"
