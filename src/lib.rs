@@ -546,12 +546,37 @@ fn is_tight(op: &str) -> bool {
     matches!(op, ":" | "!" | "^")
 }
 
-/// In minified output, keep `<` `=` etc. from fusing into a different token.
+/// True when `out` ends inside an unterminated error literal — a `#`
+/// followed only by characters its lexer scan consumes (alphanumerics,
+/// `_`, `/`, `.`). `#N/A` qualifies; `#REF!` does not (the `!` closed it).
+/// Appending another consumable character to one (`#N/A/A1`) would re-lex
+/// as a single, different token.
+fn ends_in_open_error_literal(out: &str) -> bool {
+    let mut rev = out.chars().rev().peekable();
+    while let Some(&c) = rev.peek() {
+        if c.is_alphanumeric() || matches!(c, '_' | '/' | '.') {
+            rev.next();
+        } else {
+            break;
+        }
+    }
+    matches!(rev.peek(), Some('#'))
+}
+
+/// In minified output, keep adjacent tokens from fusing into a different
+/// token: `<` `=` would re-lex as `<=`, and anything the `#` scan consumes
+/// would be swallowed by a preceding open error literal.
 fn guard_minified(out: &mut String, next: &str) {
     let (Some(l), Some(r)) = (out.chars().last(), next.chars().next()) else {
         return;
     };
     if matches!(l, '<' | '>') && matches!(r, '=' | '>') {
+        out.push(' ');
+        return;
+    }
+    if (r.is_alphanumeric() || matches!(r, '_' | '/' | '.' | '!' | '?'))
+        && ends_in_open_error_literal(out)
+    {
         out.push(' ');
     }
 }
@@ -576,6 +601,12 @@ fn render_inline(items: &[Node], minify: bool) -> (String, Vec<usize>) {
                     prev_operand = true;
                     pending_space = false;
                 } else if is_tight(op) {
+                    // A tight `!` glued onto an open error literal would be
+                    // consumed by its `#` scan on re-lex (`#N/A!` is one
+                    // token); keep it a separate token in both modes.
+                    if op == "!" && ends_in_open_error_literal(&out) {
+                        out.push(' ');
+                    }
                     offs.push(out.len());
                     out.push_str(op);
                     prev_operand = false;

@@ -185,6 +185,29 @@ fn minify_emits_no_newlines_outside_string_literals() {
     }
 }
 
+/// Every corpus formula, every width from 1 to 100: idempotent and
+/// semantics-preserving. Line length is deliberately NOT asserted here —
+/// an unbreakable token legitimately overshoots a narrow width.
+#[test]
+fn every_width_is_idempotent_and_semantics_preserving() {
+    for src in CORPUS {
+        let reference = min(src);
+        for width in 1..=100 {
+            let out = fmt_w(src, width).expect("formats cleanly");
+            assert_eq!(
+                fmt_w(&out, width).unwrap(),
+                out,
+                "not idempotent at width {width}: {src}"
+            );
+            assert_eq!(
+                min(&out),
+                reference,
+                "semantics changed at width {width}: {src}"
+            );
+        }
+    }
+}
+
 // ───────────────────────────────────────────────────────── preservation ──
 
 /// Each case is a formula that a semantic-AST formatter would silently
@@ -262,6 +285,24 @@ fn minify_collapses_without_fusing_operators() {
     for (src, want) in cases {
         assert_eq!(min(src), format!("{want}\n"), "input: {src}");
     }
+}
+
+/// The `#` scan is greedy through `/`, `.`, and one `!`/`?`, so an operator
+/// glued straight onto an open error literal is swallowed on re-lex:
+/// `#N/A/A1` is one token. Found by the property sweep; the emission guard
+/// keeps a space there in both modes.
+#[test]
+fn operators_never_fuse_into_an_error_literal() {
+    assert_eq!(min("=#N/A / A1"), "=#N/A /A1\n");
+    assert_eq!(min(&min("=#N/A / A1")), min("=#N/A / A1"));
+    assert_eq!(
+        min(&fmt("=IF(A1, #N/A / 2, 3)")),
+        min("=IF(A1, #N/A / 2, 3)")
+    );
+    // a closed literal needs no guard
+    assert_eq!(min("=#REF! + 1"), "=#REF!+1\n");
+    // and `#DIV/0!` round-trips as the single token it is
+    assert_eq!(min("=#DIV/0! + 1"), "=#DIV/0!+1\n");
 }
 
 // ─────────────────────────────────────────────────────────────── layout ──
