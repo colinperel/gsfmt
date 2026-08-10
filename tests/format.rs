@@ -307,6 +307,20 @@ fn uppercase_bound_names_respect_lexical_scope() {
         min_upper("=sum(let(sum,lambda(x,x),sum(1)))"),
         "=SUM(LET(sum,LAMBDA(x,x),sum(1)))\n"
     );
+    // a bound name shadowing LET/LAMBDA resolves to the passed value
+    // (placeholders take precedence over builtins), so its call is an
+    // ordinary user-function call: it neither uppercases nor binds —
+    // the `sum` calls inside are builtins and uppercase
+    assert_eq!(
+        min_upper("=lambda(let,let(sum,sum(1),sum(2)))(lambda(a,b,c,c))"),
+        "=LAMBDA(let,let(sum,SUM(1),SUM(2)))(LAMBDA(a,b,c,c))\n"
+    );
+    // same via LET: `lambda` is the builtin binder in its own value
+    // expression, a bound user function afterwards
+    assert_eq!(
+        min_upper("=let(lambda,lambda(x,x),lambda(sum(1),2))"),
+        "=LET(lambda,LAMBDA(x,x),lambda(SUM(1),2))\n"
+    );
 }
 
 /// An operator chain interleaved with a multi-line string stays inline:

@@ -607,18 +607,32 @@ fn binding_name(arg: &[Node]) -> Option<String> {
 /// `LAMBDA(p1, …, pn, body)` binds all but the last argument, visible in
 /// the body. Either way the bindings pop when the binder's group ends —
 /// they never leak to siblings or ancestors.
+///
+/// A call whose head is itself a bound name resolves to the passed value,
+/// not the builtin it shadows — Google documents `LAMBDA` placeholders as
+/// taking precedence over builtin names — so a bound `let(…)`/`lambda(…)`
+/// is an ordinary user-function call: it neither uppercases nor binds its
+/// arguments.
 fn apply_uppercase_heads(items: &mut [Node], scope: &mut Vec<String>) {
     for node in items {
         let Node::Group(g) = node else { continue };
-        if let Some(h) = &mut g.head {
-            let key = fold_name(&h.text);
-            if !scope.contains(&key) {
+        let head_bound = g
+            .head
+            .as_ref()
+            .is_some_and(|h| scope.contains(&fold_name(&h.text)));
+        if !head_bound {
+            if let Some(h) = &mut g.head {
                 h.text = h.text.to_uppercase();
             }
         }
         let n = g.args.len();
         let depth = scope.len();
-        match g.name_upper().as_str() {
+        let binder = if head_bound {
+            String::new()
+        } else {
+            g.name_upper()
+        };
+        match binder.as_str() {
             "LET" if n >= 3 => {
                 let mut pending = None;
                 for (i, arg) in g.args.iter_mut().enumerate() {
