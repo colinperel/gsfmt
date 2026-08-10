@@ -816,6 +816,29 @@ fn deeply_nested_prefixed_groups_stay_fast() {
     );
 }
 
+/// The `*IFS` aggregations take (criteria range, criterion) pairs, so a
+/// broken call lays them out one pair per line like SWITCH: SUMIFS-shaped
+/// calls (also AVERAGEIFS/MAXIFS/MINIFS) put the sum range alone first,
+/// COUNTIFS is pairs from the first argument. A call that fits stays
+/// inline — pair layout only shapes a break that was happening anyway.
+#[test]
+fn ifs_aggregations_break_into_criteria_pairs() {
+    assert_eq!(
+        fmt_w("=SUMIFS(qC,qG,acct,qA,\">=\" & s)", 24).unwrap(),
+        "=SUMIFS(\n  qC,\n  qG, acct,\n  qA, \">=\" & s\n)\n"
+    );
+    assert_eq!(
+        fmt_w("=COUNTIFS(qA,\">=\" & s,qG,acct)", 24).unwrap(),
+        "=COUNTIFS(\n  qA, \">=\" & s,\n  qG, acct\n)\n"
+    );
+    assert_eq!(
+        fmt_w("=MINIFS(qC,qG,acct,qA,\">=\" & s)", 24).unwrap(),
+        "=MINIFS(\n  qC,\n  qG, acct,\n  qA, \">=\" & s\n)\n"
+    );
+    // fits → stays inline, unlike LET
+    assert_eq!(fmt("=SUMIFS(qC, qG, acct)"), "=SUMIFS(qC, qG, acct)\n");
+}
+
 /// The width bound has to model pair layout. LET pins each key and its value
 /// to one line at a column derived from the widest key, so measuring its
 /// arguments independently reports a layout the formatter will never emit —
