@@ -103,7 +103,7 @@ fn config_path() -> Option<std::path::PathBuf> {
         .map(|h| std::path::Path::new(&h).join(".config/gsfmt/config"))
 }
 
-/// Read the config file once; both settings resolve against it.
+/// Read the config file once; every setting resolves against it.
 fn config_text() -> Option<(std::path::PathBuf, String)> {
     let path = config_path()?;
     let text = std::fs::read_to_string(&path).ok()?;

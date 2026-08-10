@@ -546,10 +546,16 @@ fn normalize_separators(items: &mut [Node]) {
     }
 }
 
-/// Rewrite call heads to their ASCII-uppercase form, mirroring what the
-/// Sheets editor does to builtin function names the moment a formula is
-/// entered. The second sanctioned exception to "token bytes are copied
-/// verbatim", and opt-in ([`Options::uppercase_functions`]).
+/// Rewrite call heads to their uppercase form, mirroring what the Sheets
+/// editor does to builtin function names the moment a formula is entered.
+/// The second sanctioned exception to "token bytes are copied verbatim",
+/// and opt-in ([`Options::uppercase_functions`]).
+///
+/// Bound-name matching uses Unicode case *folding* (see [`fold_name`]),
+/// not ASCII or plain uppercase conversion: Sheets names are
+/// case-insensitive beyond ASCII too, and a weaker fold would treat a
+/// bound call site as unbound and mangle it — `näme` under an ASCII
+/// fold, or `k` bound as the Kelvin sign `K` under uppercase conversion.
 ///
 /// Names bound by a `LET` or `LAMBDA` are user identifiers, not builtins:
 /// rewriting an invocation `myTax(2)` while its binding site stays an
@@ -567,7 +573,25 @@ fn uppercase_function_heads(items: &mut [Node]) {
     apply_uppercase_heads(items, &bound);
 }
 
-/// Collect every `LET`/`LAMBDA` binding-site name, ASCII-uppercased.
+/// Case-insensitive matching key for a name.
+///
+/// `str::to_uppercase` alone is case *conversion*, not case *folding*:
+/// U+212A KELVIN SIGN uppercases to itself yet folds to `k`, and `ẞ`
+/// lowercases to `ß` while `ß` uppercases to `SS` — single round-trips
+/// key those pairs differently. Lowercase → uppercase → lowercase routes
+/// every variant through the expanded uppercase form first, keying all
+/// the known conversion/folding divergences identically (`ẞ`/`ß` → `ss`,
+/// Kelvin → `k`, final sigma → `σ`, Cherokee). Still an approximation of
+/// UCD full case folding — exact folding needs the Unicode tables this
+/// dependency-free crate deliberately avoids (same stance as [`cols`]) —
+/// but both sides of every comparison go through this same key, so any
+/// residual divergence is at least consistent.
+fn fold_name(s: &str) -> String {
+    s.to_lowercase().to_uppercase().to_lowercase()
+}
+
+/// Collect every `LET`/`LAMBDA` binding-site name, case-folded via
+/// [`fold_name`].
 ///
 /// `LET(n1, v1, n2, v2, …, body)` binds the arguments at even indices
 /// before the final one; `LAMBDA(p1, …, pn, body)` binds all but the last.
@@ -586,7 +610,7 @@ fn collect_bound_names(items: &[Node], bound: &mut std::collections::HashSet<Str
             if binder(i) {
                 if let [Node::Leaf(t)] = arg.as_slice() {
                     if t.kind == Kind::Atom {
-                        bound.insert(t.text.to_ascii_uppercase());
+                        bound.insert(fold_name(&t.text));
                     }
                 }
             }
@@ -599,9 +623,8 @@ fn apply_uppercase_heads(items: &mut [Node], bound: &std::collections::HashSet<S
     for node in items {
         let Node::Group(g) = node else { continue };
         if let Some(h) = &mut g.head {
-            let upper = h.text.to_ascii_uppercase();
-            if !bound.contains(&upper) {
-                h.text = upper;
+            if !bound.contains(&fold_name(&h.text)) {
+                h.text = h.text.to_uppercase();
             }
         }
         for arg in &mut g.args {
