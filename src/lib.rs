@@ -707,6 +707,30 @@ fn cols(s: &str) -> usize {
     s.chars().count()
 }
 
+/// Widest physical line of a fragment emitted at column `col`.
+///
+/// A newline inside a string literal is content, not layout (see
+/// [`format`]): such a fragment already spans physical lines. Only the
+/// first depends on `col`; the rest restart at column 0 and no layout
+/// decision can narrow them. Measuring the fragment with [`cols`] instead
+/// counts the whole span as one line, and an operator chain around a
+/// multi-line string was being split at its operators even though every
+/// physical line fit — a break that shortens nothing.
+///
+/// Used only for sequence-level decisions in [`layout_items`]. Group fit
+/// checks deliberately keep the full-span measure: a group whose inline
+/// render spans lines cannot be a single line anyway, and the span is what
+/// pushes it to open out.
+fn emitted_widest(col: usize, s: &str) -> usize {
+    match s.split_once('\n') {
+        None => col + cols(s),
+        Some((first, rest)) => rest
+            .split('\n')
+            .map(cols)
+            .fold(col + cols(first), usize::max),
+    }
+}
+
 /// A block's width bound. `widest` is the widest line the block could need;
 /// `last` is where its final line ends — the column at which a separator
 /// appended by the caller would land. `last <= widest` always holds.
@@ -1017,7 +1041,7 @@ fn layout_items(
     // across lines because of that would be gratuitous, and it also strips
     // the very grouping that forced the break.
     let ops = binary_op_positions(items);
-    if start_col + cols(&inline) > width && !ops.is_empty() {
+    if emitted_widest(start_col, &inline) > width && !ops.is_empty() {
         let cont = indent + INDENT;
         let mut lines = layout_items(&items[..ops[0]], start_col, indent, width, false);
         for (n, &start) in ops.iter().enumerate() {
@@ -1141,7 +1165,11 @@ fn layout_group(
     let sep_after = |i: usize| -> &str { g.seps.get(i).map_or(",", |t| t.text.as_str()) };
 
     let mut lines: Vec<String> = Vec::new();
-    let first_multi = laid.iter().position(|l| l.len() > 1);
+    // A one-element block can still span physical lines: a string literal
+    // with embedded newlines renders inline but is multi-line on screen,
+    // and packing simple arguments ahead of it reads the same as packing
+    // them ahead of any other multi-line block.
+    let first_multi = laid.iter().position(|l| l.len() > 1 || l[0].contains('\n'));
 
     // Hybrid break: `SCAN(firstFriday, SEQUENCE(...),` then the lambda below.
     let packed = match first_multi {

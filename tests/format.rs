@@ -68,6 +68,9 @@ const CORPUS: &[&str] = &[
     // space before it — that would trip the trailing-whitespace invariant,
     // which cannot see token boundaries)
     "=IF(A1, \"line one\nline two\", \"x\")",
+    // an operator chain interleaved with a multi-line string (QUERY built
+    // from cell references), same no-trailing-space caveat
+    "=QUERY(A:R, \"SELECT K\nWHERE A = \"& $C$1 &\"\nORDER BY N\", 1)",
 ];
 
 // ─────────────────────────────────────────────────────────────── golden ──
@@ -185,6 +188,47 @@ fn minify_emits_no_newlines_outside_string_literals() {
         );
         assert!(out.ends_with('\n'));
     }
+}
+
+/// An operator chain interleaved with a multi-line string stays inline:
+/// every physical line already fits the width, and splitting at the `&`s
+/// shortens nothing — the span is string content, not layout. The fit
+/// check used to measure the string's full span as one line and break the
+/// chain. The simple argument before the string still packs onto the
+/// opening line, exactly as a group whose first multi-line block is a
+/// laid-out argument would pack it.
+#[test]
+fn operator_chain_around_multiline_string_stays_inline() {
+    let src = concat!(
+        "=IFERROR(\n",
+        "  UNIQUE(\n",
+        "    QUERY('Ledger Items (HS Sync)'!A:R,\n",
+        "      \"SELECT K, A, N, C, D, E \n",
+        "       WHERE A = \"& $C$1 &\" \n",
+        "         and E <> 0 \n",
+        "       ORDER BY N, K\",\n",
+        "      1\n",
+        "    )\n",
+        "  ),\n",
+        "  \"Select house number to view ledger\"\n",
+        ")",
+    );
+    let want = concat!(
+        "=IFERROR(\n",
+        "  UNIQUE(\n",
+        "    QUERY('Ledger Items (HS Sync)'!A:R,\n",
+        "      \"SELECT K, A, N, C, D, E \n",
+        "       WHERE A = \" & $C$1 & \" \n",
+        "         and E <> 0 \n",
+        "       ORDER BY N, K\",\n",
+        "      1\n",
+        "    )\n",
+        "  ),\n",
+        "  \"Select house number to view ledger\"\n",
+        ")\n",
+    );
+    assert_eq!(fmt(src), want);
+    assert_eq!(fmt(want), want, "must be a fixed point");
 }
 
 /// Every corpus formula, every width from 1 to 100: idempotent and
