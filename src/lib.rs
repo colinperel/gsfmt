@@ -23,7 +23,7 @@
 //! itself does on entry: in the dot locale, `;` argument separators are
 //! rewritten to `,` (see [`normalize_separators`]; array row separators
 //! are semantic and stay untouched), and — opt-in — call heads are
-//! uppercased (see [`uppercase_function_heads`]).
+//! uppercased (see `uppercase_function_heads`).
 
 use std::fmt;
 
@@ -62,8 +62,8 @@ pub struct Options {
     pub decimal: Decimal,
     /// Rewrite call heads to uppercase (`sum(` → `SUM(`), as the Sheets
     /// editor itself does to builtin names on entry. Names bound by a
-    /// `LET` or `LAMBDA` anywhere in the formula are left as authored —
-    /// see [`uppercase_function_heads`]. Off by default: token text is
+    /// `LET` or `LAMBDA` are left as authored within the binding's scope —
+    /// see `uppercase_function_heads`. Off by default: token text is
     /// otherwise copied verbatim.
     pub uppercase_functions: bool,
 }
@@ -560,17 +560,16 @@ fn normalize_separators(items: &mut [Node]) {
 /// Names bound by a `LET` or `LAMBDA` are user identifiers, not builtins:
 /// rewriting an invocation `myTax(2)` while its binding site stays an
 /// argument token would tear the two apart visually, so bound names keep
-/// their authored case. Binding sites are collected formula-wide rather
-/// than per-scope — Sheets names are case-insensitive, so the only cost of
-/// the coarser scope is that a builtin shadowed by a binding *anywhere* in
-/// the formula also keeps its authored case, which errs on the side of not
-/// touching user identifiers. Named functions (defined at the spreadsheet
+/// their authored case. Bindings follow Sheets' evaluation-order scope: a
+/// `LET` name is visible only to *subsequent* value expressions and the
+/// final expression — `sum` in `LET(sum, sum(A1:A2), sum)` is a builtin
+/// call in the value position, so it uppercases — and a `LAMBDA`
+/// parameter is visible only in its body. Outside the binder the same
+/// name is a builtin again. Named functions (defined at the spreadsheet
 /// level) are indistinguishable from builtins here and are uppercased too;
 /// the Sheets named-function editor already forces their names uppercase.
 fn uppercase_function_heads(items: &mut [Node]) {
-    let mut bound = std::collections::HashSet::new();
-    collect_bound_names(items, &mut bound);
-    apply_uppercase_heads(items, &bound);
+    apply_uppercase_heads(items, &mut Vec::new());
 }
 
 /// Case-insensitive matching key for a name.
@@ -590,46 +589,64 @@ fn fold_name(s: &str) -> String {
     s.to_lowercase().to_uppercase().to_lowercase()
 }
 
-/// Collect every `LET`/`LAMBDA` binding-site name, case-folded via
-/// [`fold_name`].
-///
-/// `LET(n1, v1, n2, v2, …, body)` binds the arguments at even indices
-/// before the final one; `LAMBDA(p1, …, pn, body)` binds all but the last.
-/// A binding site is a single atom when the formula is well-formed;
-/// anything else contributes nothing rather than guessing.
-fn collect_bound_names(items: &[Node], bound: &mut std::collections::HashSet<String>) {
-    for node in items {
-        let Node::Group(g) = node else { continue };
-        let n = g.args.len();
-        let binder = |i: usize| match g.name_upper().as_str() {
-            "LET" => n >= 3 && i + 1 < n && i % 2 == 0,
-            "LAMBDA" => n >= 2 && i + 1 < n,
-            _ => false,
-        };
-        for (i, arg) in g.args.iter().enumerate() {
-            if binder(i) {
-                if let [Node::Leaf(t)] = arg.as_slice() {
-                    if t.kind == Kind::Atom {
-                        bound.insert(fold_name(&t.text));
-                    }
-                }
-            }
-            collect_bound_names(arg, bound);
-        }
+/// The binding-site name of `arg`, case-folded via [`fold_name`]. A
+/// binding site is a single atom when the formula is well-formed;
+/// anything else yields nothing rather than guessing.
+fn binding_name(arg: &[Node]) -> Option<String> {
+    match arg {
+        [Node::Leaf(t)] if t.kind == Kind::Atom => Some(fold_name(&t.text)),
+        _ => None,
     }
 }
 
-fn apply_uppercase_heads(items: &mut [Node], bound: &std::collections::HashSet<String>) {
+/// Walk `items` uppercasing unbound call heads, with `scope` as the stack
+/// of `LET`/`LAMBDA` names bound at this point in evaluation order.
+///
+/// `LET(n1, v1, n2, v2, …, body)` binds each `nᵢ` starting *after* `vᵢ`
+/// (a name is not visible in its own value expression);
+/// `LAMBDA(p1, …, pn, body)` binds all but the last argument, visible in
+/// the body. Either way the bindings pop when the binder's group ends —
+/// they never leak to siblings or ancestors.
+fn apply_uppercase_heads(items: &mut [Node], scope: &mut Vec<String>) {
     for node in items {
         let Node::Group(g) = node else { continue };
         if let Some(h) = &mut g.head {
-            if !bound.contains(&fold_name(&h.text)) {
+            let key = fold_name(&h.text);
+            if !scope.contains(&key) {
                 h.text = h.text.to_uppercase();
             }
         }
-        for arg in &mut g.args {
-            apply_uppercase_heads(arg, bound);
+        let n = g.args.len();
+        let depth = scope.len();
+        match g.name_upper().as_str() {
+            "LET" if n >= 3 => {
+                let mut pending = None;
+                for (i, arg) in g.args.iter_mut().enumerate() {
+                    apply_uppercase_heads(arg, scope);
+                    if i + 1 < n && i % 2 == 0 {
+                        pending = binding_name(arg);
+                    } else if let Some(name) = pending.take() {
+                        scope.push(name);
+                    }
+                }
+            }
+            "LAMBDA" if n >= 2 => {
+                for (i, arg) in g.args.iter_mut().enumerate() {
+                    apply_uppercase_heads(arg, scope);
+                    if i + 1 < n {
+                        if let Some(name) = binding_name(arg) {
+                            scope.push(name);
+                        }
+                    }
+                }
+            }
+            _ => {
+                for arg in &mut g.args {
+                    apply_uppercase_heads(arg, scope);
+                }
+            }
         }
+        scope.truncate(depth);
     }
 }
 
@@ -1422,7 +1439,7 @@ fn split_leading_eq(toks: &[Token]) -> (bool, &[Token]) {
 /// with two sanctioned exceptions — in the dot locale, `;` argument
 /// separators normalize to `,` (see [`normalize_separators`]), and under
 /// [`Options::uppercase_functions`] call heads are uppercased (see
-/// [`uppercase_function_heads`]). A newline inside a string literal is
+/// `uppercase_function_heads`). A newline inside a string literal is
 /// content and survives untouched.
 ///
 /// # Errors
