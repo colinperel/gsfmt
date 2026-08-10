@@ -1052,12 +1052,15 @@ fn min_chunk_width(items: &[Node], col: usize) -> MinWidth {
 }
 
 /// `LET`/`IFS`/`SWITCH` bind (key, value) pairs that read best one pair per
-/// line with the values column-aligned. Returns how many leading arguments
-/// sit alone before the pairs begin.
+/// line with the values column-aligned, and the `*IFS` aggregations take
+/// (criteria range, criterion) pairs that read the same way. Returns how
+/// many leading arguments sit alone before the pairs begin: the sum/average
+/// range for `SUMIFS`-shaped calls, the switched expression for `SWITCH`;
+/// `COUNTIFS` and `IFS` are pairs from the first argument.
 fn pair_lead(name_upper: &str) -> Option<usize> {
     match name_upper {
-        "LET" | "IFS" => Some(0),
-        "SWITCH" => Some(1),
+        "LET" | "IFS" | "COUNTIFS" => Some(0),
+        "SWITCH" | "SUMIFS" | "AVERAGEIFS" | "MAXIFS" | "MINIFS" => Some(1),
         _ => None,
     }
 }
