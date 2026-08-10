@@ -3,6 +3,31 @@
 All notable changes to gsfmt. Versions follow [SemVer](https://semver.org);
 entries mirror the [GitHub release notes](https://github.com/colinperel/gsfmt/releases).
 
+## v0.4.0 — 2026-08-10
+
+Output-affecting release: broken `*IFS` aggregation calls now format
+differently.
+
+### Behavior change
+
+- **Pair layout for `*IFS` aggregation criteria** — a broken
+  `SUMIFS`/`AVERAGEIFS`/`MAXIFS`/`MINIFS` puts the aggregated range alone,
+  then one (criteria range, criterion) pair per line, values
+  column-aligned; `COUNTIFS` is pairs from the first argument. Calls that
+  fit stay inline.
+- Pair layout yields to the plain per-argument layout when it cannot fit
+  but the plain layout can (breakable oversized key, or a pair line that
+  overflows while its parts fit alone). A lone unbreakable overshoot
+  keeps pairs — width remains a target, not a ceiling.
+- All name-driven layout rules follow LET/LAMBDA evaluation-order scope,
+  matching the uppercase rewrite: a bound user function named
+  `sumifs`/`let`/`lambda` lays out as an ordinary call.
+
+### Library
+
+- `Group` gains a private `bound_head` field — source-breaking for
+  exhaustive external `Group` literals.
+
 ## v0.3.0 — 2026-08-10
 
 Feature release: opt-in uppercase normalization of function names. Off by
