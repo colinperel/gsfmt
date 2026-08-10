@@ -1279,32 +1279,22 @@ fn layout_items(
     // Passing the clamped value as both made an overlong group look like it
     // fitted inline, emitting a line far past the width.
     //
-    // Whether to clamp is decided from the group's *minimum* achievable
-    // width at each candidate column — the width it would occupy if every
-    // breakable construct broke. That is a single non-branching walk of the
-    // subtree, so the decision costs O(nodes).
+    // The body always takes the block indent (`indent + INDENT`), never the
+    // column where the prefix left the open bracket. Hanging the body under
+    // the bracket was the one place layout indented by horizontal position
+    // instead of nesting, and it produced skinny right-margin towers the
+    // moment a chain like `INDEX(…):INDEX(…)` broke its tail — the deeper
+    // the prefix, the less width every argument had. One rule also means
+    // one shape at every width: narrowing the window changes where lines
+    // break, not the geometry. `min_chunk_width` models exactly this clamp,
+    // so the width bound and the emitted layout now agree by construction.
     //
-    // Laying both candidates out and measuring them is the obvious
-    // alternative and is exponential: each trial recurses into nested
-    // prefixed groups that each run their own two trials, doubling per
-    // level. It reached ~5s on a depth-20 formula of 624 bytes, which is an
-    // editor freeze on save.
     // The group's opening line begins at `group_col` (which includes the
     // `=` column at top level); its body indents from `indent` (which does
     // not — `=` is a column, not indentation, and the close bracket must
     // stay on the indent grid).
     let group_col = start_col + cols(&prefix);
-    let natural_body = indent + cols(&prefix);
-    let clamped = indent + INDENT;
-    let natural = min_group_width(g, group_col).widest;
-    let body = if clamped < natural_body
-        && natural > width
-        && min_group_width(g, clamped).widest < natural
-    {
-        clamped
-    } else {
-        natural_body
-    };
+    let body = (indent + cols(&prefix)).min(indent + INDENT);
     let mut lines = layout_group(g, group_col, body, width, force);
     lines[0] = format!("{prefix}{}", lines[0]);
     if !suffix.is_empty() {
