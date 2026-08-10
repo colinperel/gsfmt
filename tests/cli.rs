@@ -93,7 +93,7 @@ fn a_second_file_argument_is_rejected() {
 
     let out = run(&[a.to_str().unwrap(), b.to_str().unwrap()], &[], "");
     assert_eq!(out.code, 1, "stdout was: {}", out.stdout);
-    assert!(out.stderr.contains("only one FILE"), "{}", out.stderr);
+    assert!(out.stderr.contains("need --write"), "{}", out.stderr);
 
     // one file is still fine
     let ok = run(&[a.to_str().unwrap()], &[], "");
@@ -265,4 +265,47 @@ fn bad_width_values_are_usage_errors() {
     );
     assert_eq!(out.code, 1);
     assert!(out.stderr.contains("invalid width"), "{}", out.stderr);
+}
+
+/// `--write` formats every FILE in place, leaves already-clean files
+/// untouched, keeps going past a bad formula (reporting it, exit 2), and
+/// refuses stdin.
+#[test]
+fn write_mode_formats_files_in_place() {
+    let dir = std::env::temp_dir().join("gsfmt-cli-write-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let messy = dir.join("messy.gsfx");
+    let clean = dir.join("clean.gsfx");
+    let broken = dir.join("broken.gsfx");
+    std::fs::write(&messy, "=sum( A1,B2 )").unwrap();
+    std::fs::write(&clean, "=SUM(A1, B2)\n").unwrap();
+    std::fs::write(&broken, "=SUM(A1").unwrap();
+
+    let out = run(
+        &["--write", messy.to_str().unwrap(), clean.to_str().unwrap()],
+        &[],
+        "",
+    );
+    assert_eq!(out.code, 0, "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "", "in-place mode prints nothing");
+    assert_eq!(std::fs::read_to_string(&messy).unwrap(), "=sum(A1, B2)\n");
+    assert_eq!(std::fs::read_to_string(&clean).unwrap(), "=SUM(A1, B2)\n");
+
+    // a parse failure is reported per file; the good file still formats
+    std::fs::write(&messy, "=sum( A1,B2 )").unwrap();
+    let out = run(
+        &["-i", broken.to_str().unwrap(), messy.to_str().unwrap()],
+        &[],
+        "",
+    );
+    assert_eq!(out.code, 2, "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("broken.gsfx"), "{}", out.stderr);
+    assert_eq!(std::fs::read_to_string(&messy).unwrap(), "=sum(A1, B2)\n");
+    assert_eq!(std::fs::read_to_string(&broken).unwrap(), "=SUM(A1");
+
+    // stdin and empty FILE lists are usage errors
+    let out = run(&["--write"], &[], "=SUM(A1)\n");
+    assert_eq!(out.code, 1);
+    let out = run(&["--write", "-"], &[], "=SUM(A1)\n");
+    assert_eq!(out.code, 1);
 }
