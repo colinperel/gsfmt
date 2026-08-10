@@ -309,3 +309,39 @@ fn write_mode_formats_files_in_place() {
     let out = run(&["--write", "-"], &[], "=SUM(A1)\n");
     assert_eq!(out.code, 1);
 }
+
+/// The in-place replacement must not disturb neighbours or metadata: a
+/// pre-existing sidecar file survives (the temp name is created
+/// exclusively, never a fixed predictable path), and the original's
+/// permission bits carry over instead of the process umask.
+#[test]
+fn write_mode_preserves_neighbours_and_permissions() {
+    let dir = std::env::temp_dir().join("gsfmt-cli-write-meta-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("meta.gsfx");
+    let sidecar = dir.join("meta.gsfx.gsfmt~");
+    std::fs::write(&f, "=sum( A1,B2 )").unwrap();
+    std::fs::write(&sidecar, "precious bytes").unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    let out = run(&["--write", f.to_str().unwrap()], &[], "");
+    assert_eq!(out.code, 0, "stderr: {}", out.stderr);
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "=sum(A1, B2)\n");
+    assert_eq!(
+        std::fs::read_to_string(&sidecar).unwrap(),
+        "precious bytes",
+        "sidecar file must survive an in-place write"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&f).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "permissions must survive an in-place write");
+    }
+}

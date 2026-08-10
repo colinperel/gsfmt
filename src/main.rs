@@ -277,15 +277,14 @@ fn run() -> Result<ExitCode, String> {
     if inputs.len() > 1 {
         return Err("several FILEs need --write; without it, pass one".into());
     }
-    let src = match inputs.first() {
-        Some(Some(p)) => std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?,
-        _ => {
-            let mut buf = String::new();
-            std::io::stdin()
-                .read_to_string(&mut buf)
-                .map_err(|e| format!("stdin: {e}"))?;
-            buf
-        }
+    let src = if let Some(Some(p)) = inputs.first() {
+        std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?
+    } else {
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| format!("stdin: {e}"))?;
+        buf
     };
 
     match render(&src) {
@@ -310,6 +309,14 @@ enum WriteError {
 /// Format one file in place. Already-clean files are left untouched; a
 /// changed one is written to a sibling temp file and renamed over the
 /// original, so a crash mid-write cannot leave a truncated formula behind.
+///
+/// The temp file is opened with `create_new`, which refuses to follow an
+/// existing file *or symlink* at the candidate path — a predictable fixed
+/// sidecar name could be pre-placed to make this clobber an unrelated
+/// file. It also carries the original's permission bits before the rename:
+/// a fresh file gets the process umask, and a `0600` formula must not
+/// come back `0644`. Ownership, ACLs, and extended attributes are beyond
+/// what std can carry and follow the umask'd temp file.
 fn write_in_place(
     path: &str,
     render: &impl Fn(&str) -> Result<String, gsfmt::Error>,
@@ -320,10 +327,42 @@ fn write_in_place(
     if out == src {
         return Ok(());
     }
-    let tmp = format!("{path}.gsfmt~");
-    std::fs::write(&tmp, &out).map_err(|e| io(e, "write"))?;
-    std::fs::rename(&tmp, path).map_err(|e| io(e, "rename"))?;
-    Ok(())
+    let perms = std::fs::metadata(path)
+        .map_err(|e| io(e, "stat"))?
+        .permissions();
+    let mut tmp: Option<String> = None;
+    for n in 0u32..100 {
+        let cand = format!("{path}.gsfmt-{}-{n}~", std::process::id());
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&cand)
+        {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(out.as_bytes()) {
+                    drop(f);
+                    let _ = std::fs::remove_file(&cand);
+                    return Err(io(e, "write"));
+                }
+                tmp = Some(cand);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(io(e, "create")),
+        }
+    }
+    let Some(tmp) = tmp else {
+        return Err(WriteError::Io(format!(
+            "{path}: could not create a temporary file beside it"
+        )));
+    };
+    let finish = std::fs::set_permissions(&tmp, perms)
+        .map_err(|e| io(e, "chmod"))
+        .and_then(|()| std::fs::rename(&tmp, path).map_err(|e| io(e, "rename")));
+    if finish.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    finish
 }
 
 #[cfg(test)]
