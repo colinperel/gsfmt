@@ -1110,12 +1110,16 @@ fn pair_layout_fits(g: &Group, lead: usize, arg_indent: usize, width: usize) -> 
         return true;
     }
     // Pairs overflow: fall back only if the plain layout genuinely fits.
+    // The final argument carries no separator.
     let plain = g
         .args
         .iter()
         .enumerate()
         .filter(|(_, a)| !a.is_empty())
-        .map(|(i, a)| min_items_width(a, arg_indent).with_sep(sep_len(g, i)))
+        .map(|(i, a)| {
+            let sep = if i + 1 == n { 0 } else { sep_len(g, i) };
+            min_items_width(a, arg_indent).with_sep(sep)
+        })
         .max()
         .unwrap_or(arg_indent);
     plain > width

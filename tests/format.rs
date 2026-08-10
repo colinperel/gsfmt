@@ -879,6 +879,12 @@ criterionValueWithDescriptiveNameForInvoices)",
 criterionValueWithDescriptiveNameForInvoices\n)\n"
     );
     assert!(out.lines().all(|l| l.len() <= WIDTH), "overflow:\n{out}");
+    // the final argument carries no separator, so a criterion that fits
+    // the width exactly at plain indentation still triggers the fallback
+    assert_eq!(
+        fmt_w("=SUMIFS(qC,someRange,criterionThatFitsAlone)", 24).unwrap(),
+        "=SUMIFS(\n  qC,\n  someRange,\n  criterionThatFitsAlone\n)\n"
+    );
 }
 
 /// A LET/LAMBDA-bound name shadowing a pair-laid builtin is a user call:
