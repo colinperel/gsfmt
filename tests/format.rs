@@ -1369,3 +1369,26 @@ fn selector_shape_is_preserved_not_validated() {
         assert_eq!(fmt(src), format!("{src}\n"), "input: {src}");
     }
 }
+
+/// A chain's opened tail always takes the block indent, never the column
+/// its prefix pushed the open bracket to. Hanging the body under the
+/// bracket produced a skinny right-margin tower the moment a
+/// `INDEX(…):INDEX(…)` range broke inside a deep LET value — legal, but
+/// most of the width sat unused. One rule, every width: narrowing the
+/// window changes where lines break, not the geometry.
+#[test]
+fn chain_tail_bodies_take_block_indent_not_bracket_column() {
+    assert_eq!(
+        fmt_w(
+            "=LET(above,INDEX($A:H,firstRow,relCol):INDEX($A:H,prevRow,relCol),above)",
+            50
+        )
+        .unwrap(),
+        "=LET(\n  above, INDEX($A:H, firstRow, relCol):INDEX(\n             $A:H,\n             prevRow,\n             relCol\n           ),\n  above\n)\n"
+    );
+    // short prefixes clamp too — same shape, one rule
+    assert_eq!(
+        fmt_w("=SUM(B6:INDEX(longArgumentName1,longArgumentName2))", 30).unwrap(),
+        "=SUM(\n  B6:INDEX(\n      longArgumentName1,\n      longArgumentName2\n    )\n)\n"
+    );
+}
