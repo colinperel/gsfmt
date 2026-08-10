@@ -864,6 +864,23 @@ fn pair_layout_yields_to_breakable_oversized_keys() {
     );
 }
 
+/// A pair whose key and value are both fine alone but overflow side by
+/// side takes the plain per-argument layout — pair layout pins them to one
+/// line, and here falling back genuinely fits.
+#[test]
+fn pair_layout_yields_when_a_whole_pair_overflows() {
+    let out = fmt(
+        "=SUMIFS(sumRange,criteriaRangeWithDescriptiveNameForInvoices,\
+criterionValueWithDescriptiveNameForInvoices)",
+    );
+    assert_eq!(
+        out,
+        "=SUMIFS(\n  sumRange,\n  criteriaRangeWithDescriptiveNameForInvoices,\n  \
+criterionValueWithDescriptiveNameForInvoices\n)\n"
+    );
+    assert!(out.lines().all(|l| l.len() <= WIDTH), "overflow:\n{out}");
+}
+
 /// A LET/LAMBDA-bound name shadowing a pair-laid builtin is a user call:
 /// it gets the plain per-argument layout, not SUMIFS's criteria pairs —
 /// the same scope rule the uppercase rewrite follows.
@@ -872,6 +889,21 @@ fn bound_names_shadowing_pair_builtins_lay_out_plainly() {
     assert_eq!(
         fmt_w("=LET(sumifs,LAMBDA(a,a),sumifs(someRange,otherRange,criterion))", 24).unwrap(),
         "=LET(\n  sumifs, LAMBDA(a, a),\n  sumifs(\n    someRange,\n    otherRange,\n    criterion\n  )\n)\n"
+    );
+    // the other name-driven layout rules follow the same scope: a bound
+    // `let` doesn't always-break, and a bound `lambda` doesn't force its
+    // last argument into its own block
+    assert_eq!(
+        fmt_w("=IF(x,LET(let,LAMBDA(a,a),let(1,2,3)),y)", 30).unwrap(),
+        "=IF(x,\n  LET(\n    let, LAMBDA(a, a),\n    let(1, 2, 3)\n  ),\n  y\n)\n"
+    );
+    assert_eq!(
+        fmt_w(
+            "=LET(lambda,LAMBDA(a,b,a),lambda(longishArgument1,longishArgument2,tiny))",
+            28
+        )
+        .unwrap(),
+        "=LET(\n  lambda, LAMBDA(a, b, a),\n  lambda(\n    longishArgument1,\n    longishArgument2,\n    tiny\n  )\n)\n"
     );
 }
 
