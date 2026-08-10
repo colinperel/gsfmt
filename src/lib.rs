@@ -19,10 +19,11 @@
 //! argument holding zero tokens; a redundant paren group is a node;
 //! identifier case and string bytes are copied verbatim.
 //!
-//! One sanctioned exception: in the dot locale, `;` argument separators
-//! are rewritten to `,` — exactly what the Sheets editor itself does on
-//! entry (see [`normalize_separators`]). Array row separators are
-//! semantic and stay untouched.
+//! Two sanctioned exceptions, both mirroring what the Sheets editor
+//! itself does on entry: in the dot locale, `;` argument separators are
+//! rewritten to `,` (see [`normalize_separators`]; array row separators
+//! are semantic and stay untouched), and — opt-in — call heads are
+//! uppercased (see [`uppercase_function_heads`]).
 
 use std::fmt;
 
@@ -59,6 +60,12 @@ pub struct Options {
     /// Target line width. Not a hard ceiling — an unbreakable token wins.
     pub width: usize,
     pub decimal: Decimal,
+    /// Rewrite call heads to uppercase (`sum(` → `SUM(`), as the Sheets
+    /// editor itself does to builtin names on entry. Names bound by a
+    /// `LET` or `LAMBDA` anywhere in the formula are left as authored —
+    /// see [`uppercase_function_heads`]. Off by default: token text is
+    /// otherwise copied verbatim.
+    pub uppercase_functions: bool,
 }
 
 impl Default for Options {
@@ -66,6 +73,7 @@ impl Default for Options {
         Self {
             width: DEFAULT_WIDTH,
             decimal: Decimal::default(),
+            uppercase_functions: false,
         }
     }
 }
@@ -534,6 +542,70 @@ fn normalize_separators(items: &mut [Node]) {
             for arg in &mut g.args {
                 normalize_separators(arg);
             }
+        }
+    }
+}
+
+/// Rewrite call heads to their ASCII-uppercase form, mirroring what the
+/// Sheets editor does to builtin function names the moment a formula is
+/// entered. The second sanctioned exception to "token bytes are copied
+/// verbatim", and opt-in ([`Options::uppercase_functions`]).
+///
+/// Names bound by a `LET` or `LAMBDA` are user identifiers, not builtins:
+/// rewriting an invocation `myTax(2)` while its binding site stays an
+/// argument token would tear the two apart visually, so bound names keep
+/// their authored case. Binding sites are collected formula-wide rather
+/// than per-scope — Sheets names are case-insensitive, so the only cost of
+/// the coarser scope is that a builtin shadowed by a binding *anywhere* in
+/// the formula also keeps its authored case, which errs on the side of not
+/// touching user identifiers. Named functions (defined at the spreadsheet
+/// level) are indistinguishable from builtins here and are uppercased too;
+/// the Sheets named-function editor already forces their names uppercase.
+fn uppercase_function_heads(items: &mut [Node]) {
+    let mut bound = std::collections::HashSet::new();
+    collect_bound_names(items, &mut bound);
+    apply_uppercase_heads(items, &bound);
+}
+
+/// Collect every `LET`/`LAMBDA` binding-site name, ASCII-uppercased.
+///
+/// `LET(n1, v1, n2, v2, …, body)` binds the arguments at even indices
+/// before the final one; `LAMBDA(p1, …, pn, body)` binds all but the last.
+/// A binding site is a single atom when the formula is well-formed;
+/// anything else contributes nothing rather than guessing.
+fn collect_bound_names(items: &[Node], bound: &mut std::collections::HashSet<String>) {
+    for node in items {
+        let Node::Group(g) = node else { continue };
+        let n = g.args.len();
+        let binder = |i: usize| match g.name_upper().as_str() {
+            "LET" => n >= 3 && i + 1 < n && i % 2 == 0,
+            "LAMBDA" => n >= 2 && i + 1 < n,
+            _ => false,
+        };
+        for (i, arg) in g.args.iter().enumerate() {
+            if binder(i) {
+                if let [Node::Leaf(t)] = arg.as_slice() {
+                    if t.kind == Kind::Atom {
+                        bound.insert(t.text.to_ascii_uppercase());
+                    }
+                }
+            }
+            collect_bound_names(arg, bound);
+        }
+    }
+}
+
+fn apply_uppercase_heads(items: &mut [Node], bound: &std::collections::HashSet<String>) {
+    for node in items {
+        let Node::Group(g) = node else { continue };
+        if let Some(h) = &mut g.head {
+            let upper = h.text.to_ascii_uppercase();
+            if !bound.contains(&upper) {
+                h.text = upper;
+            }
+        }
+        for arg in &mut g.args {
+            apply_uppercase_heads(arg, bound);
         }
     }
 }
@@ -1324,9 +1396,11 @@ fn split_leading_eq(toks: &[Token]) -> (bool, &[Token]) {
 /// Format a formula across as many lines as readability wants.
 ///
 /// Only whitespace between tokens changes; token text is copied verbatim,
-/// with one sanctioned exception — in the dot locale, `;` argument
-/// separators normalize to `,` (see [`normalize_separators`]). A newline
-/// inside a string literal is content and survives untouched.
+/// with two sanctioned exceptions — in the dot locale, `;` argument
+/// separators normalize to `,` (see [`normalize_separators`]), and under
+/// [`Options::uppercase_functions`] call heads are uppercased (see
+/// [`uppercase_function_heads`]). A newline inside a string literal is
+/// content and survives untouched.
 ///
 /// # Errors
 ///
@@ -1341,6 +1415,9 @@ pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
     let mut items = parse(rest)?;
     if opts.decimal == Decimal::Dot {
         normalize_separators(&mut items);
+    }
+    if opts.uppercase_functions {
+        uppercase_function_heads(&mut items);
     }
 
     let lead = usize::from(eq);
@@ -1374,8 +1451,9 @@ pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
 ///
 /// A newline inside a string literal is content, not layout, and is
 /// preserved — such a formula minifies to more than one physical line.
-/// Dot-locale `;` argument separators normalize to `,` here too, so
-/// `minify` and [`format`] always agree on token text.
+/// Dot-locale `;` argument separators normalize to `,` here too, and
+/// [`Options::uppercase_functions`] applies here too, so `minify` and
+/// [`format`] always agree on token text.
 ///
 /// # Errors
 ///
@@ -1389,6 +1467,9 @@ pub fn minify(src: &str, opts: &Options) -> Result<String, Error> {
     let mut items = parse(rest)?;
     if opts.decimal == Decimal::Dot {
         normalize_separators(&mut items);
+    }
+    if opts.uppercase_functions {
+        uppercase_function_heads(&mut items);
     }
 
     let mut out = String::new();

@@ -24,6 +24,7 @@ fn comma_opts() -> gsfmt::Options {
     gsfmt::Options {
         width: WIDTH,
         decimal: gsfmt::Decimal::Comma,
+        ..gsfmt::Options::default()
     }
 }
 
@@ -37,6 +38,21 @@ fn fmt_w(src: &str, width: usize) -> Result<String, gsfmt::Error> {
 
 fn min(src: &str) -> String {
     gsfmt::minify(src, &gsfmt::Options::default()).expect("minifies cleanly")
+}
+
+fn upper_opts() -> gsfmt::Options {
+    gsfmt::Options {
+        uppercase_functions: true,
+        ..gsfmt::Options::default()
+    }
+}
+
+fn fmt_upper(src: &str) -> String {
+    gsfmt::format(src, &upper_opts()).expect("formats cleanly")
+}
+
+fn min_upper(src: &str) -> String {
+    gsfmt::minify(src, &upper_opts()).expect("minifies cleanly")
 }
 
 /// Formulas exercised by every property test below.
@@ -168,6 +184,21 @@ fn formatting_preserves_semantics() {
     }
 }
 
+/// The uppercase rewrite must be as safe as the default mode: idempotent,
+/// and format/minify still agree on token text over the whole corpus.
+#[test]
+fn uppercase_formatting_is_idempotent_and_semantics_preserving() {
+    for src in CORPUS {
+        let once = fmt_upper(src);
+        assert_eq!(fmt_upper(&once), once, "not idempotent: {src}");
+        assert_eq!(
+            min_upper(&once),
+            min_upper(src),
+            "format changed semantics: {src}"
+        );
+    }
+}
+
 /// Minify collapses layout to one line — but a newline *inside* a string
 /// literal is content (Sheets accepts multi-line strings via Alt+Enter),
 /// so the invariant is "no newlines outside string tokens", not "one line".
@@ -188,6 +219,39 @@ fn minify_emits_no_newlines_outside_string_literals() {
         );
         assert!(out.ends_with('\n'));
     }
+}
+
+/// `uppercase_functions` rewrites call heads the way the Sheets editor
+/// does on entry — and nothing else: arguments, references, strings, and
+/// LET/LAMBDA-bound names keep their authored case. Bound names match
+/// case-insensitively (Sheets names are), and the setting applies to
+/// minify too so the two modes keep agreeing on token text.
+#[test]
+fn uppercase_functions_rewrites_heads_only() {
+    // heads uppercase; the reference argument is untouched
+    assert_eq!(fmt_upper("=sum(a1:a2)"), "=SUM(a1:a2)\n");
+    // string content and sheet names are untouched
+    assert_eq!(
+        fmt_upper("=iferror(a1, \"use sum()\")"),
+        "=IFERROR(a1, \"use sum()\")\n"
+    );
+    // LET/LAMBDA-bound names keep their authored case at the call site,
+    // matched case-insensitively; builtin heads inside still uppercase
+    assert_eq!(
+        fmt_upper("=let(myTax, lambda(x, round(x * 0.3)), MYTAX(1000))"),
+        "=LET(\n  myTax, LAMBDA(x, ROUND(x * 0.3)),\n  MYTAX(1000)\n)\n"
+    );
+    // a LAMBDA parameter invoked as a call keeps its case
+    assert_eq!(
+        fmt_upper("=lambda(fn, fn(2))(lambda(x, x))"),
+        "=LAMBDA(fn, fn(2))(LAMBDA(x, x))\n"
+    );
+    // minify agrees
+    assert_eq!(min_upper("=sum(a1:a2)"), "=SUM(a1:a2)\n");
+    // idempotent: re-formatting the rewritten output is a no-op
+    assert_eq!(fmt_upper("=SUM(a1:a2)"), "=SUM(a1:a2)\n");
+    // off by default: authored case survives
+    assert_eq!(fmt("=sum(a1:a2)"), "=sum(a1:a2)\n");
 }
 
 /// An operator chain interleaved with a multi-line string stays inline:
@@ -482,6 +546,7 @@ fn comma_locale_argument_separators_are_preserved() {
     let o = gsfmt::Options {
         width: 14,
         decimal: gsfmt::Decimal::Comma,
+        ..gsfmt::Options::default()
     };
     assert_eq!(
         gsfmt::format("=LET(x;1;x+1)", &o).unwrap(),
@@ -868,6 +933,7 @@ fn comma_locale_golden_is_a_fixed_point() {
     let o = gsfmt::Options {
         width: 60,
         decimal: gsfmt::Decimal::Comma,
+        ..gsfmt::Options::default()
     };
     assert_eq!(gsfmt::format(golden, &o).unwrap(), golden);
     assert!(

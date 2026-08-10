@@ -208,6 +208,35 @@ fn a_bad_decimal_value_is_a_usage_error() {
     assert!(out.stderr.contains("GSFMT_DECIMAL"), "{}", out.stderr);
 }
 
+/// `--uppercase` resolves through the same flag > env > config chain as the
+/// other settings and defaults to off.
+#[test]
+fn uppercase_is_selectable_and_defaults_to_off() {
+    let out = run(&[], &[], "=sum(a1:a2)\n");
+    assert_eq!(out.stdout, "=sum(a1:a2)\n");
+
+    let out = run(&["-u"], &[], "=sum(a1:a2)\n");
+    assert_eq!(out.stdout, "=SUM(a1:a2)\n");
+
+    let out = run(&[], &[("GSFMT_UPPERCASE", "true")], "=sum(a1:a2)\n");
+    assert_eq!(out.stdout, "=SUM(a1:a2)\n");
+
+    let dir = std::env::temp_dir().join("gsfmt-cli-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let cfg = dir.join("uppercase-config");
+    std::fs::write(&cfg, "uppercase = true\n").unwrap();
+    let out = run(
+        &[],
+        &[("GSFMT_CONFIG", cfg.to_str().unwrap())],
+        "=sum(a1)\n",
+    );
+    assert_eq!(out.stdout, "=SUM(a1)\n");
+
+    let out = run(&[], &[("GSFMT_UPPERCASE", "yes")], "=sum(a1)\n");
+    assert_eq!(out.code, 1);
+    assert!(out.stderr.contains("GSFMT_UPPERCASE"), "{}", out.stderr);
+}
+
 /// Mixed-locale input exits 2 with nothing on stdout, so conform surfaces a
 /// format error instead of writing a reinterpreted formula into the buffer.
 #[test]

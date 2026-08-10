@@ -15,9 +15,12 @@ gsfmt --width 100 -          # format stdin at width 100
 
 Formatting is idempotent (formatting formatted output is a no-op) and
 byte-preserving for content: only whitespace changes, never tokens —
-with one exception: in the dot locale, `;` argument separators are
-normalized to `,`, exactly what the Sheets editor does on entry (array
-row separators like `{1;2}` are untouched). Table references
+with two exceptions, both mirroring what the Sheets editor does on
+entry: in the dot locale, `;` argument separators are normalized to `,`
+(array row separators like `{1;2}` are untouched), and with
+`--uppercase` function names are rewritten to uppercase (`sum(` →
+`SUM(`; names bound by LET or LAMBDA keep their authored case, since
+those are user identifiers, not builtins). Table references
 (`Table1[Column 1]`, `.[chip]` postfixes) are treated as opaque atoms —
 laid out but never reflowed internally.
 
@@ -29,6 +32,7 @@ Resolved per setting from: flag → environment → config file → built-in.
 |---------|------|-----|------------|---------|
 | line width | `--width <N>` | `$GSFMT_WIDTH` | `width = <N>` | 82 |
 | decimal mark | `--decimal <dot\|comma>` | `$GSFMT_DECIMAL` | `decimal = <dot\|comma>` | `dot` |
+| uppercase functions | `--uppercase` | `$GSFMT_UPPERCASE` | `uppercase = <true\|false>` | `false` |
 
 The config file is `$GSFMT_CONFIG`, else
 `$XDG_CONFIG_HOME/gsfmt/config`, else `~/.config/gsfmt/config` —
