@@ -839,6 +839,42 @@ fn ifs_aggregations_break_into_criteria_pairs() {
     assert_eq!(fmt("=SUMIFS(qC, qG, acct)"), "=SUMIFS(qC, qG, acct)\n");
 }
 
+/// Pair layout renders keys inline, so a breakable key that overflows the
+/// width — a criteria range built from a call — sends the whole group to
+/// the plain per-argument layout, where the key can wrap. An unbreakable
+/// oversized key (a long LET binding name) keeps pair layout and
+/// overshoots, like any other unbreakable token.
+#[test]
+fn pair_layout_yields_to_breakable_oversized_keys() {
+    assert_eq!(
+        fmt_w(
+            "=SUMIFS(qC,INDIRECT(\"A\" & someLongNamedCell),criterion)",
+            24
+        )
+        .unwrap(),
+        "=SUMIFS(qC,\n  INDIRECT(\n    \"A\"\n      & someLongNamedCell\n  ),\n  criterion\n)\n"
+    );
+    assert_eq!(
+        fmt_w(
+            "=LET(veryLongBindingNameHere,1,veryLongBindingNameHere+1)",
+            18
+        )
+        .unwrap(),
+        "=LET(\n  veryLongBindingNameHere, 1,\n  veryLongBindingNameHere\n    + 1\n)\n"
+    );
+}
+
+/// A LET/LAMBDA-bound name shadowing a pair-laid builtin is a user call:
+/// it gets the plain per-argument layout, not SUMIFS's criteria pairs —
+/// the same scope rule the uppercase rewrite follows.
+#[test]
+fn bound_names_shadowing_pair_builtins_lay_out_plainly() {
+    assert_eq!(
+        fmt_w("=LET(sumifs,LAMBDA(a,a),sumifs(someRange,otherRange,criterion))", 24).unwrap(),
+        "=LET(\n  sumifs, LAMBDA(a, a),\n  sumifs(\n    someRange,\n    otherRange,\n    criterion\n  )\n)\n"
+    );
+}
+
 /// The width bound has to model pair layout. LET pins each key and its value
 /// to one line at a column derived from the widest key, so measuring its
 /// arguments independently reports a layout the formatter will never emit —

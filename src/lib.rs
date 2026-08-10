@@ -396,6 +396,12 @@ pub struct Group {
     /// Separator tokens between arguments, so array row breaks (`;`) survive.
     pub seps: Vec<Token>,
     pub close: Token,
+    /// True when the head is a `LET`/`LAMBDA`-bound name at this position in
+    /// evaluation order (see [`mark_bound_heads`]): the call resolves to the
+    /// passed value, not any builtin it shadows, so name-driven treatment —
+    /// uppercase rewriting, pair layout — must not apply. Set by a pass over
+    /// the parsed tree, not by the parser itself.
+    pub(crate) bound_head: bool,
 }
 
 impl Group {
@@ -504,6 +510,7 @@ fn parse_group(
                         args,
                         seps,
                         close: toks[i].clone(),
+                        bound_head: false,
                     },
                     i + 1,
                 ));
@@ -560,7 +567,8 @@ fn normalize_separators(items: &mut [Node]) {
 /// Names bound by a `LET` or `LAMBDA` are user identifiers, not builtins:
 /// rewriting an invocation `myTax(2)` while its binding site stays an
 /// argument token would tear the two apart visually, so bound names keep
-/// their authored case. Bindings follow Sheets' evaluation-order scope: a
+/// their authored case. Bindings follow Sheets' evaluation-order scope —
+/// computed once by [`mark_bound_heads`], which must have run first: a
 /// `LET` name is visible only to *subsequent* value expressions and the
 /// final expression — `sum` in `LET(sum, sum(A1:A2), sum)` is a builtin
 /// call in the value position, so it uppercases — and a `LAMBDA`
@@ -569,7 +577,17 @@ fn normalize_separators(items: &mut [Node]) {
 /// level) are indistinguishable from builtins here and are uppercased too;
 /// the Sheets named-function editor already forces their names uppercase.
 fn uppercase_function_heads(items: &mut [Node]) {
-    apply_uppercase_heads(items, &mut Vec::new());
+    for node in items {
+        let Node::Group(g) = node else { continue };
+        if !g.bound_head {
+            if let Some(h) = &mut g.head {
+                h.text = h.text.to_uppercase();
+            }
+        }
+        for arg in &mut g.args {
+            uppercase_function_heads(arg);
+        }
+    }
 }
 
 /// Case-insensitive matching key for a name.
@@ -599,7 +617,7 @@ fn binding_name(arg: &[Node]) -> Option<String> {
     }
 }
 
-/// Walk `items` uppercasing unbound call heads, with `scope` as the stack
+/// Walk `items` setting [`Group::bound_head`], with `scope` as the stack
 /// of `LET`/`LAMBDA` names bound at this point in evaluation order.
 ///
 /// `LET(n1, v1, n2, v2, …, body)` binds each `nᵢ` starting *after* `vᵢ`
@@ -611,23 +629,18 @@ fn binding_name(arg: &[Node]) -> Option<String> {
 /// A call whose head is itself a bound name resolves to the passed value,
 /// not the builtin it shadows — Google documents `LAMBDA` placeholders as
 /// taking precedence over builtin names — so a bound `let(…)`/`lambda(…)`
-/// is an ordinary user-function call: it neither uppercases nor binds its
-/// arguments.
-fn apply_uppercase_heads(items: &mut [Node], scope: &mut Vec<String>) {
+/// is an ordinary user-function call: it neither binds its arguments nor
+/// receives any other name-driven treatment (uppercasing, pair layout).
+fn mark_bound_heads(items: &mut [Node], scope: &mut Vec<String>) {
     for node in items {
         let Node::Group(g) = node else { continue };
-        let head_bound = g
+        g.bound_head = g
             .head
             .as_ref()
             .is_some_and(|h| scope.contains(&fold_name(&h.text)));
-        if !head_bound {
-            if let Some(h) = &mut g.head {
-                h.text = h.text.to_uppercase();
-            }
-        }
         let n = g.args.len();
         let depth = scope.len();
-        let binder = if head_bound {
+        let binder = if g.bound_head {
             String::new()
         } else {
             g.name_upper()
@@ -636,7 +649,7 @@ fn apply_uppercase_heads(items: &mut [Node], scope: &mut Vec<String>) {
             "LET" if n >= 3 => {
                 let mut pending = None;
                 for (i, arg) in g.args.iter_mut().enumerate() {
-                    apply_uppercase_heads(arg, scope);
+                    mark_bound_heads(arg, scope);
                     if i + 1 < n && i % 2 == 0 {
                         pending = binding_name(arg);
                     } else if let Some(name) = pending.take() {
@@ -646,7 +659,7 @@ fn apply_uppercase_heads(items: &mut [Node], scope: &mut Vec<String>) {
             }
             "LAMBDA" if n >= 2 => {
                 for (i, arg) in g.args.iter_mut().enumerate() {
-                    apply_uppercase_heads(arg, scope);
+                    mark_bound_heads(arg, scope);
                     if i + 1 < n {
                         if let Some(name) = binding_name(arg) {
                             scope.push(name);
@@ -656,7 +669,7 @@ fn apply_uppercase_heads(items: &mut [Node], scope: &mut Vec<String>) {
             }
             _ => {
                 for arg in &mut g.args {
-                    apply_uppercase_heads(arg, scope);
+                    mark_bound_heads(arg, scope);
                 }
             }
         }
@@ -892,11 +905,14 @@ fn min_group_width(g: &Group, col: usize) -> MinWidth {
     let widest = (col + head).max(last);
     let arg_indent = col + INDENT;
 
-    // LET/IFS/SWITCH pin each key and its value to the same line, at a column
-    // derived from the widest key. Measuring their arguments independently
-    // underestimates: it reports a layout the formatter will never emit, and
-    // the caller then declines to clamp a body that genuinely does not fit.
-    if !g.is_array() {
+    // Pair-laid groups pin each key and its value to the same line, at a
+    // column derived from the widest key. Measuring their arguments
+    // independently underestimates: it reports a layout the formatter will
+    // never emit, and the caller then declines to clamp a body that
+    // genuinely does not fit. When `layout_group` abandons pairs for the
+    // plain per-argument layout (breakable oversized key), this figure
+    // over-reports — the safe direction: the real layout only gets narrower.
+    if !g.is_array() && !g.bound_head {
         if let Some(lead) = pair_lead(&g.name_upper()) {
             if g.args.len() > lead + 1 {
                 return MinWidth {
@@ -1063,6 +1079,23 @@ fn pair_lead(name_upper: &str) -> Option<usize> {
         "SWITCH" | "SUMIFS" | "AVERAGEIFS" | "MAXIFS" | "MINIFS" => Some(1),
         _ => None,
     }
+}
+
+/// Whether every pair key can sit inline at `arg_indent`, which pair layout
+/// requires — it renders keys inline unconditionally. A key that overflows
+/// the width *and* would get narrower broken (a criteria range built from a
+/// call, say `INDIRECT(…)`) sends the group to the plain per-argument
+/// layout instead, where it can wrap. An unbreakable oversized key — a long
+/// `LET` binding name — changes nothing by falling back, so it keeps pair
+/// layout and overshoots, exactly like any other unbreakable token.
+fn pair_keys_render_inline(g: &Group, lead: usize, arg_indent: usize, width: usize) -> bool {
+    let n = g.args.len();
+    let pair_count = (n - lead) / 2;
+    (0..pair_count).all(|p| {
+        let key = &g.args[lead + p * 2];
+        let inline_end = arg_indent + cols(&render_inline(key, false).0);
+        inline_end + 2 <= width || min_items_width(key, arg_indent).widest >= inline_end
+    })
 }
 
 /// `LET` always breaks, however short it is. It exists to name intermediate
@@ -1268,9 +1301,9 @@ fn layout_group(
     let open = format!("{head}{}", g.open.text);
     let arg_indent = indent + INDENT;
 
-    if !g.is_array() {
+    if !g.is_array() && !g.bound_head {
         if let Some(lead) = pair_lead(&g.name_upper()) {
-            if g.args.len() > lead + 1 {
+            if g.args.len() > lead + 1 && pair_keys_render_inline(g, lead, arg_indent, width) {
                 return layout_pairs(g, &open, lead, indent, width);
             }
         }
@@ -1473,6 +1506,7 @@ pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
     if opts.decimal == Decimal::Dot {
         normalize_separators(&mut items);
     }
+    mark_bound_heads(&mut items, &mut Vec::new());
     if opts.uppercase_functions {
         uppercase_function_heads(&mut items);
     }
@@ -1525,6 +1559,7 @@ pub fn minify(src: &str, opts: &Options) -> Result<String, Error> {
     if opts.decimal == Decimal::Dot {
         normalize_separators(&mut items);
     }
+    mark_bound_heads(&mut items, &mut Vec::new());
     if opts.uppercase_functions {
         uppercase_function_heads(&mut items);
     }
