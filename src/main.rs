@@ -20,6 +20,11 @@ OPTIONS:
     -w, --width <N>     Target line width before breaking
     -d, --decimal <K>   Decimal mark: `dot` (1.5, args by `,`) or
                         `comma` (1,5, args by `;`). Default: dot
+    -u, --uppercase     Uppercase function names (`sum(` -> `SUM(`), as the
+                        Sheets editor does on entry. Names bound by LET or
+                        LAMBDA keep their authored case. Also resolved from
+                        $GSFMT_UPPERCASE or `uppercase = <true|false>` in
+                        the config file. Default: off
     -h, --help          Print this help
     -V, --version       Print version
 
@@ -64,6 +69,14 @@ fn value_from_config<'a>(text: &'a str, want: &str) -> Option<&'a str> {
         }
     }
     None
+}
+
+fn parse_bool(raw: &str) -> Result<bool, String> {
+    match raw {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(format!("invalid value {other:?} (expected true or false)")),
+    }
 }
 
 fn parse_decimal(raw: &str) -> Result<gsfmt::Decimal, String> {
@@ -123,60 +136,12 @@ fn resolve<T>(
     Ok(default)
 }
 
-fn main() -> ExitCode {
-    match run() {
-        Ok(code) => code,
-        Err(msg) => {
-            eprintln!("gsfmt: {msg}");
-            ExitCode::from(1)
-        }
-    }
-}
-
-fn run() -> Result<ExitCode, String> {
-    let mut minify = false;
-    let mut width_flag: Option<usize> = None;
-    let mut decimal_flag: Option<gsfmt::Decimal> = None;
-    let mut path: Option<String> = None;
-    let mut saw_input = false;
-    let mut args = std::env::args().skip(1);
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "-h" | "--help" => {
-                print!("{USAGE}");
-                return Ok(ExitCode::SUCCESS);
-            }
-            "-V" | "--version" => {
-                println!("gsfmt {}", env!("CARGO_PKG_VERSION"));
-                return Ok(ExitCode::SUCCESS);
-            }
-            "-m" | "--minify" => minify = true,
-            "-w" | "--width" => {
-                let v = args.next().ok_or("--width requires a value")?;
-                width_flag = Some(v.parse().map_err(|_| format!("invalid width {v:?}"))?);
-            }
-            "-d" | "--decimal" => {
-                let v = args.next().ok_or("--decimal requires a value")?;
-                decimal_flag = Some(parse_decimal(&v)?);
-            }
-            // A bare `-` means stdin; anything else starting with `-` is a
-            // typo'd flag, not a filename.
-            other if other != "-" && other.starts_with('-') => {
-                return Err(format!("unknown option {other:?}\n\n{USAGE}"));
-            }
-            other => {
-                // Exactly one input is supported. Silently formatting only
-                // the last of several would quietly ignore the user's files.
-                if saw_input {
-                    return Err("only one FILE argument is supported".into());
-                }
-                saw_input = true;
-                path = (other != "-").then(|| other.to_string());
-            }
-        }
-    }
-
+/// Resolve every setting through flag → environment → config file → default.
+fn resolve_options(
+    width_flag: Option<usize>,
+    decimal_flag: Option<gsfmt::Decimal>,
+    uppercase_flag: Option<bool>,
+) -> Result<gsfmt::Options, String> {
     let cfg = config_text();
     let width = resolve(
         width_flag,
@@ -200,7 +165,78 @@ fn run() -> Result<ExitCode, String> {
         parse_decimal,
         gsfmt::Decimal::default(),
     )?;
-    let opts = gsfmt::Options { width, decimal };
+    let uppercase_functions = resolve(
+        uppercase_flag,
+        "GSFMT_UPPERCASE",
+        "uppercase",
+        cfg.as_ref(),
+        parse_bool,
+        false,
+    )?;
+    Ok(gsfmt::Options {
+        width,
+        decimal,
+        uppercase_functions,
+    })
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(code) => code,
+        Err(msg) => {
+            eprintln!("gsfmt: {msg}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn run() -> Result<ExitCode, String> {
+    let mut minify = false;
+    let mut width_flag: Option<usize> = None;
+    let mut decimal_flag: Option<gsfmt::Decimal> = None;
+    let mut uppercase_flag: Option<bool> = None;
+    let mut path: Option<String> = None;
+    let mut saw_input = false;
+    let mut args = std::env::args().skip(1);
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                print!("{USAGE}");
+                return Ok(ExitCode::SUCCESS);
+            }
+            "-V" | "--version" => {
+                println!("gsfmt {}", env!("CARGO_PKG_VERSION"));
+                return Ok(ExitCode::SUCCESS);
+            }
+            "-m" | "--minify" => minify = true,
+            "-w" | "--width" => {
+                let v = args.next().ok_or("--width requires a value")?;
+                width_flag = Some(v.parse().map_err(|_| format!("invalid width {v:?}"))?);
+            }
+            "-d" | "--decimal" => {
+                let v = args.next().ok_or("--decimal requires a value")?;
+                decimal_flag = Some(parse_decimal(&v)?);
+            }
+            "-u" | "--uppercase" => uppercase_flag = Some(true),
+            // A bare `-` means stdin; anything else starting with `-` is a
+            // typo'd flag, not a filename.
+            other if other != "-" && other.starts_with('-') => {
+                return Err(format!("unknown option {other:?}\n\n{USAGE}"));
+            }
+            other => {
+                // Exactly one input is supported. Silently formatting only
+                // the last of several would quietly ignore the user's files.
+                if saw_input {
+                    return Err("only one FILE argument is supported".into());
+                }
+                saw_input = true;
+                path = (other != "-").then(|| other.to_string());
+            }
+        }
+    }
+
+    let opts = resolve_options(width_flag, decimal_flag, uppercase_flag)?;
 
     let src = if let Some(p) = &path {
         std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?
@@ -234,7 +270,7 @@ fn run() -> Result<ExitCode, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_decimal, value_from_config};
+    use super::{parse_bool, parse_decimal, value_from_config};
 
     #[test]
     fn config_values_are_parsed() {
@@ -252,6 +288,13 @@ mod tests {
         assert_eq!(value_from_config(text, "width"), Some("96"));
         assert_eq!(value_from_config("# width = 70", "width"), None);
         assert_eq!(value_from_config("indent = 4", "width"), None);
+    }
+
+    #[test]
+    fn bool_values_are_validated() {
+        assert!(parse_bool("true").unwrap());
+        assert!(!parse_bool("false").unwrap());
+        assert!(parse_bool("yes").is_err());
     }
 
     #[test]
