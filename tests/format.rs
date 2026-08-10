@@ -818,7 +818,7 @@ fn deeply_nested_prefixed_groups_stay_fast() {
 
 /// The `*IFS` aggregations take (criteria range, criterion) pairs, so a
 /// broken call lays them out one pair per line like SWITCH: SUMIFS-shaped
-/// calls (also AVERAGEIFS/MAXIFS/MINIFS) put the sum range alone first,
+/// calls (also AVERAGEIFS/MAXIFS/MINIFS) put the aggregated range first,
 /// COUNTIFS is pairs from the first argument. A call that fits stays
 /// inline — pair layout only shapes a break that was happening anyway.
 #[test]
