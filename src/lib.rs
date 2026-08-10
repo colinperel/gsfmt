@@ -1279,15 +1279,16 @@ fn layout_items(
     // Passing the clamped value as both made an overlong group look like it
     // fitted inline, emitting a line far past the width.
     //
-    // The body always takes the block indent (`indent + INDENT`), never the
-    // column where the prefix left the open bracket. Hanging the body under
+    // The body is capped at the block indent (`indent + INDENT`) — a
+    // prefix shorter than one indent level keeps its natural column, a
+    // longer one never drags the body past the cap. Hanging the body under
     // the bracket was the one place layout indented by horizontal position
     // instead of nesting, and it produced skinny right-margin towers the
     // moment a chain like `INDEX(…):INDEX(…)` broke its tail — the deeper
     // the prefix, the less width every argument had. One rule also means
     // one shape at every width: narrowing the window changes where lines
-    // break, not the geometry. `min_chunk_width` models exactly this clamp,
-    // so the width bound and the emitted layout now agree by construction.
+    // break, not the geometry. `min_chunk_width` models exactly this cap,
+    // so the width bound and the emitted layout agree by construction.
     //
     // The group's opening line begins at `group_col` (which includes the
     // `=` column at top level); its body indents from `indent` (which does
