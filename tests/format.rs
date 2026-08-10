@@ -275,6 +275,40 @@ fn uppercase_functions_rewrites_heads_only() {
     assert_eq!(fmt("=sum(a1:a2)"), "=sum(a1:a2)\n");
 }
 
+/// Bound-name suppression follows Sheets' evaluation-order scope, not a
+/// formula-wide sweep: a `LET` name is visible only to subsequent value
+/// expressions and the final expression, a `LAMBDA` parameter only to its
+/// body, and neither leaks to siblings or ancestors of the binder.
+#[test]
+fn uppercase_bound_names_respect_lexical_scope() {
+    // a LET name is not visible in its own value expression: the `sum`
+    // call there is the builtin and uppercases; the body call is bound
+    assert_eq!(
+        min_upper("=let(sum,sum(a1:a2),sum(1))"),
+        "=LET(sum,SUM(a1:a2),sum(1))\n"
+    );
+    // earlier LET names are visible in later value expressions
+    assert_eq!(
+        min_upper("=let(f,lambda(x,x),g,f(1),g(2))"),
+        "=LET(f,LAMBDA(x,x),g,f(1),g(2))\n"
+    );
+    // a later binding does not reach back into an earlier value
+    assert_eq!(
+        min_upper("=let(a,sum(1),sum,lambda(x,x),sum(2))"),
+        "=LET(a,SUM(1),sum,LAMBDA(x,x),sum(2))\n"
+    );
+    // bindings pop at the binder's edge: siblings and ancestors see the
+    // builtin again
+    assert_eq!(
+        min_upper("=if(lambda(sum,sum(1))(2),sum(3),sum(4))"),
+        "=IF(LAMBDA(sum,sum(1))(2),SUM(3),SUM(4))\n"
+    );
+    assert_eq!(
+        min_upper("=sum(let(sum,lambda(x,x),sum(1)))"),
+        "=SUM(LET(sum,LAMBDA(x,x),sum(1)))\n"
+    );
+}
+
 /// An operator chain interleaved with a multi-line string stays inline:
 /// every physical line already fits the width, and splitting at the `&`s
 /// shortens nothing — the span is string content, not layout. The fit
