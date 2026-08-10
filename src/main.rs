@@ -10,13 +10,19 @@ const USAGE: &str = "\
 gsfmt — format Google Sheets formulas
 
 USAGE:
-    gsfmt [OPTIONS] [FILE]
+    gsfmt [OPTIONS] [FILE...]
 
     Reads stdin when FILE is absent or `-`. Writes to stdout.
+    With --write, formats each FILE in place instead (stdin not allowed);
+    several FILEs are only accepted together with --write.
 
 OPTIONS:
     -m, --minify        Collapse the formula onto a single line (a newline
                         inside a string literal is content and survives)
+    -i, --write         Rewrite FILEs in place instead of printing to
+                        stdout. A file whose formatting is already clean is
+                        left untouched. Errors are reported per file and the
+                        remaining files still format.
     -w, --width <N>     Target line width before breaking
     -d, --decimal <K>   Decimal mark: `dot` (1.5, args by `,`) or
                         `comma` (1,5, args by `;`). Default: dot
@@ -51,8 +57,8 @@ DECIMAL:
 
 EXIT CODES:
     0  success
-    1  usage error
-    2  the formula could not be parsed
+    1  usage error, or a FILE could not be read or written
+    2  a formula could not be parsed
 ";
 
 /// Pull `<key> = <value>` out of a config file. Blank lines and `#` comments are
@@ -192,11 +198,12 @@ fn main() -> ExitCode {
 
 fn run() -> Result<ExitCode, String> {
     let mut minify = false;
+    let mut write = false;
     let mut width_flag: Option<usize> = None;
     let mut decimal_flag: Option<gsfmt::Decimal> = None;
     let mut uppercase_flag: Option<bool> = None;
-    let mut path: Option<String> = None;
-    let mut saw_input = false;
+    // `None` in the list means stdin (`-`).
+    let mut inputs: Vec<Option<String>> = Vec::new();
     let mut args = std::env::args().skip(1);
 
     while let Some(arg) = args.next() {
@@ -210,6 +217,7 @@ fn run() -> Result<ExitCode, String> {
                 return Ok(ExitCode::SUCCESS);
             }
             "-m" | "--minify" => minify = true,
+            "-i" | "--write" => write = true,
             "-w" | "--width" => {
                 let v = args.next().ok_or("--width requires a value")?;
                 width_flag = Some(v.parse().map_err(|_| format!("invalid width {v:?}"))?);
@@ -224,37 +232,63 @@ fn run() -> Result<ExitCode, String> {
             other if other != "-" && other.starts_with('-') => {
                 return Err(format!("unknown option {other:?}\n\n{USAGE}"));
             }
-            other => {
-                // Exactly one input is supported. Silently formatting only
-                // the last of several would quietly ignore the user's files.
-                if saw_input {
-                    return Err("only one FILE argument is supported".into());
-                }
-                saw_input = true;
-                path = (other != "-").then(|| other.to_string());
-            }
+            other => inputs.push((other != "-").then(|| other.to_string())),
         }
     }
 
     let opts = resolve_options(width_flag, decimal_flag, uppercase_flag)?;
-
-    let src = if let Some(p) = &path {
-        std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?
-    } else {
-        let mut buf = String::new();
-        std::io::stdin()
-            .read_to_string(&mut buf)
-            .map_err(|e| format!("stdin: {e}"))?;
-        buf
+    let render = |src: &str| {
+        if minify {
+            gsfmt::minify(src, &opts)
+        } else {
+            gsfmt::format(src, &opts)
+        }
     };
 
-    let result = if minify {
-        gsfmt::minify(&src, &opts)
-    } else {
-        gsfmt::format(&src, &opts)
+    if write {
+        // In-place mode: every input must be a real file, and errors are
+        // reported per file so one bad formula doesn't block the rest.
+        if inputs.is_empty() {
+            return Err("--write requires at least one FILE".into());
+        }
+        if inputs.iter().any(Option::is_none) {
+            return Err("--write cannot read stdin; pass FILEs".into());
+        }
+        let mut worst = 0u8;
+        for p in inputs.iter().flatten() {
+            if let Err(e) = write_in_place(p, &render) {
+                match e {
+                    WriteError::Io(msg) => {
+                        eprintln!("gsfmt: {msg}");
+                        worst = worst.max(1);
+                    }
+                    WriteError::Parse(e) => {
+                        eprintln!("gsfmt: {p}: {e}");
+                        worst = worst.max(2);
+                    }
+                }
+            }
+        }
+        return Ok(ExitCode::from(worst));
+    }
+
+    // Filter mode: exactly one input. Silently formatting only the last of
+    // several would quietly ignore the user's files.
+    if inputs.len() > 1 {
+        return Err("several FILEs need --write; without it, pass one".into());
+    }
+    let src = match inputs.first() {
+        Some(Some(p)) => std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?,
+        _ => {
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .map_err(|e| format!("stdin: {e}"))?;
+            buf
+        }
     };
 
-    match result {
+    match render(&src) {
         Ok(out) => {
             std::io::stdout()
                 .write_all(out.as_bytes())
@@ -266,6 +300,30 @@ fn run() -> Result<ExitCode, String> {
             Ok(ExitCode::from(2))
         }
     }
+}
+
+enum WriteError {
+    Io(String),
+    Parse(gsfmt::Error),
+}
+
+/// Format one file in place. Already-clean files are left untouched; a
+/// changed one is written to a sibling temp file and renamed over the
+/// original, so a crash mid-write cannot leave a truncated formula behind.
+fn write_in_place(
+    path: &str,
+    render: &impl Fn(&str) -> Result<String, gsfmt::Error>,
+) -> Result<(), WriteError> {
+    let io = |e: std::io::Error, what: &str| WriteError::Io(format!("{path}: {what}: {e}"));
+    let src = std::fs::read_to_string(path).map_err(|e| io(e, "read"))?;
+    let out = render(&src).map_err(WriteError::Parse)?;
+    if out == src {
+        return Ok(());
+    }
+    let tmp = format!("{path}.gsfmt~");
+    std::fs::write(&tmp, &out).map_err(|e| io(e, "write"))?;
+    std::fs::rename(&tmp, path).map_err(|e| io(e, "rename"))?;
+    Ok(())
 }
 
 #[cfg(test)]
