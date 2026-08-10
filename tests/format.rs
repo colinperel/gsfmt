@@ -1,12 +1,13 @@
 //! Behaviour tests for the formatter.
 //!
 //! The contract under test is narrow and load-bearing: only whitespace
-//! *outside* string literals may change, plus exactly one sanctioned token
-//! rewrite — dot-locale `;` argument separators normalize to `,`, as the
-//! Sheets editor itself does. Anything else — a dropped paren, a blank
-//! argument turned into `""`, a renormalised number, a case change — is a
-//! corrupted formula, so those get dedicated tests rather than relying on
-//! the golden files to notice.
+//! *outside* string literals may change, plus two sanctioned token
+//! rewrites, both mirroring the Sheets editor — dot-locale `;` argument
+//! separators normalize to `,`, and (opt-in) call heads uppercase.
+//! Anything else — a dropped paren, a blank argument turned into `""`, a
+//! renormalised number, a case change outside the opt-in — is a corrupted
+//! formula, so those get dedicated tests rather than relying on the
+//! golden files to notice.
 
 /// Matches the binary's built-in default (src/main.rs). The library takes
 /// width as a parameter, so these tests are unaffected by whatever config
@@ -245,6 +246,26 @@ fn uppercase_functions_rewrites_heads_only() {
     assert_eq!(
         fmt_upper("=lambda(fn, fn(2))(lambda(x, x))"),
         "=LAMBDA(fn, fn(2))(LAMBDA(x, x))\n"
+    );
+    // bound-name matching is Unicode case folding, not ASCII: `nÄme`
+    // binds `näme(1)`, so the call keeps its authored case (an ASCII
+    // fold would miss the match and mangle it to `NäME(1)`)
+    assert_eq!(
+        fmt_upper("=let(nÄme, lambda(x, x), näme(1))"),
+        "=LET(\n  nÄme, LAMBDA(x, x),\n  näme(1)\n)\n"
+    );
+    // folding, not uppercase conversion: U+212A KELVIN SIGN uppercases to
+    // itself but folds to `k`, so it still binds a `k(` call site
+    assert_eq!(
+        fmt_upper("=let(\u{212a}, lambda(x, x), k(1))"),
+        "=LET(\n  \u{212a}, LAMBDA(x, x),\n  k(1)\n)\n"
+    );
+    // and the expanding cases: `ẞ` lowercases to `ß` while `ß` uppercases
+    // to `SS`, so a one-step round-trip keys them apart and mangles the
+    // bound call to `SS(1)`
+    assert_eq!(
+        fmt_upper("=let(\u{1e9e}, lambda(x, x), \u{df}(1))"),
+        "=LET(\n  \u{1e9e}, LAMBDA(x, x),\n  \u{df}(1)\n)\n"
     );
     // minify agrees
     assert_eq!(min_upper("=sum(a1:a2)"), "=SUM(a1:a2)\n");
