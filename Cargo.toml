@@ -1,6 +1,6 @@
 [package]
 name = "gsfmt"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.74"
 description = "Formatter for Google Sheets formulas (LET/LAMBDA aware)"

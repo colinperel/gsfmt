@@ -3,6 +3,20 @@
 All notable changes to gsfmt. Versions follow [SemVer](https://semver.org);
 entries mirror the [GitHub release notes](https://github.com/colinperel/gsfmt/releases).
 
+## v0.6.0 — 2026-08-10
+
+Output-affecting release: broken chain tails now format differently.
+
+### Behavior change
+
+- **Chain-tail bodies are capped at the block indent** — when a prefix
+  (an operator chain like `INDEX(…):INDEX(…)`, a unary sign) pushes a
+  trailing group right and the group breaks, its body no longer hangs at
+  the open bracket's column: it takes at most `indent + INDENT`. Removes
+  the skinny right-margin towers deep LET values produced, and gives a
+  formula one shape at every width. Corpus goldens were unaffected
+  (their chain tails already hit the old overflow clamp).
+
 ## v0.5.0 — 2026-08-10
 
 Feature release: in-place formatting and the completed pair-shaped
