@@ -21,7 +21,7 @@
 //!
 //! Two sanctioned exceptions, both mirroring what the Sheets editor
 //! itself does on entry: in the dot locale, `;` argument separators are
-//! rewritten to `,` (see [`normalize_separators`]; array row separators
+//! rewritten to `,` (see `normalize_separators`; array row separators
 //! are semantic and stay untouched), and — opt-in — call heads are
 //! uppercased (see `uppercase_function_heads`).
 
@@ -421,7 +421,7 @@ impl Group {
 /// # Errors
 ///
 /// Returns an error for unbalanced or mismatched brackets, a stray closing
-/// bracket, or nesting deeper than [`MAX_DEPTH`] levels.
+/// bracket, or nesting deeper than `MAX_DEPTH` levels.
 pub fn parse(toks: &[Token]) -> Result<Vec<Node>, Error> {
     let (items, next) = parse_items(toks, 0, 0)?;
     if next < toks.len() {
@@ -836,7 +836,7 @@ fn cols(s: &str) -> usize {
 /// Widest physical line of a fragment emitted at column `col`.
 ///
 /// A newline inside a string literal is content, not layout (see
-/// [`format`]): such a fragment already spans physical lines. Only the
+/// [`format()`]): such a fragment already spans physical lines. Only the
 /// first depends on `col`; the rest restart at column 0 and no layout
 /// decision can narrow them. Measuring the fragment with [`cols`] instead
 /// counts the whole span as one line, and an operator chain around a
@@ -1451,7 +1451,7 @@ fn split_leading_eq(toks: &[Token]) -> (bool, &[Token]) {
 ///
 /// Only whitespace between tokens changes; token text is copied verbatim,
 /// with two sanctioned exceptions — in the dot locale, `;` argument
-/// separators normalize to `,` (see [`normalize_separators`]), and under
+/// separators normalize to `,` (see `normalize_separators`), and under
 /// [`Options::uppercase_functions`] call heads are uppercased (see
 /// `uppercase_function_heads`). A newline inside a string literal is
 /// content and survives untouched.
@@ -1507,7 +1507,7 @@ pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
 /// preserved — such a formula minifies to more than one physical line.
 /// Dot-locale `;` argument separators normalize to `,` here too, and
 /// [`Options::uppercase_functions`] applies here too, so `minify` and
-/// [`format`] always agree on token text.
+/// [`format()`] always agree on token text.
 ///
 /// # Errors
 ///

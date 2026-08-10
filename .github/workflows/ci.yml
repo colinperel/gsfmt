@@ -37,8 +37,22 @@ jobs:
       - run: rustup toolchain install 1.74 --profile minimal
       - run: cargo +1.74 test --locked
 
+  # Public API docs must build clean: strict mode catches broken and
+  # ambiguous intra-doc links that a plain `cargo doc` waves through.
+  doc:
+    name: Rustdoc (strict)
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v6
+      - run: cargo doc --no-deps --locked
+
   # tests/data/ goldens are canonical; tree-sitter-gsformula mirrors six of
-  # them as examples/. Fail loudly when the copies drift.
+  # them as examples/. Fail loudly when the copies drift. The checkout is
+  # pinned to the grammar's latest release tag so an unrelated push over
+  # there can't fail this repo's CI; bump the ref when cutting a synced
+  # release pair.
   fixtures:
     name: Fixture sync
     runs-on: ubuntu-latest
@@ -47,6 +61,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: colinperel/tree-sitter-gsformula
+          ref: v0.3.0
           path: grammar
       - run: |
           status=0
