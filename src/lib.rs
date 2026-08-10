@@ -1068,15 +1068,22 @@ fn min_chunk_width(items: &[Node], col: usize) -> MinWidth {
 }
 
 /// `LET`/`IFS`/`SWITCH` bind (key, value) pairs that read best one pair per
-/// line with the values column-aligned, and the `*IFS` aggregations take
-/// (criteria range, criterion) pairs that read the same way. Returns how
-/// many leading arguments sit alone before the pairs begin: the aggregated
-/// range for `SUMIFS`-shaped calls, the switched expression for `SWITCH`;
-/// `COUNTIFS` and `IFS` are pairs from the first argument.
+/// line with the values column-aligned, and the rest of the builtins whose
+/// variadic tail repeats in twos — the `*IFS` (criteria range, criterion)
+/// aggregations, `SORT`/`SORTN` (column, ascending), `AVERAGE.WEIGHTED`
+/// (values, weights), `GETPIVOTDATA` (column, item) — read the same way.
+/// Returns how many leading arguments sit alone before the pairs begin:
+/// none for the pure-pair forms, the aggregated range or switched
+/// expression for the lead-1 forms, `GETPIVOTDATA`'s value name and anchor
+/// cell, `SORTN`'s range, count, and ties mode.
 fn pair_lead(name_upper: &str) -> Option<usize> {
     match name_upper {
-        "LET" | "IFS" | "COUNTIFS" => Some(0),
-        "SWITCH" | "SUMIFS" | "AVERAGEIFS" | "MAXIFS" | "MINIFS" => Some(1),
+        "LET" | "IFS" | "COUNTIFS" | "AVERAGE.WEIGHTED" => Some(0),
+        "SWITCH" | "SUMIFS" | "AVERAGEIFS" | "MAXIFS" | "MINIFS" | "COUNTUNIQUEIFS" | "SORT" => {
+            Some(1)
+        }
+        "GETPIVOTDATA" => Some(2),
+        "SORTN" => Some(3),
         _ => None,
     }
 }

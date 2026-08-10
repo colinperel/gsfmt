@@ -839,6 +839,53 @@ fn ifs_aggregations_break_into_criteria_pairs() {
     assert_eq!(fmt("=SUMIFS(qC, qG, acct)"), "=SUMIFS(qC, qG, acct)\n");
 }
 
+/// The remaining builtins whose variadic tail repeats in twos take the
+/// same layout: SORT/SORTN's (column, ascending), AVERAGE.WEIGHTED's
+/// (values, weights), GETPIVOTDATA's (column, item) — each after its own
+/// count of lone leading arguments.
+#[test]
+fn remaining_pair_shaped_builtins_break_into_pairs() {
+    assert_eq!(
+        fmt_w(
+            "=SORT(A2:C99,colWithLongName1,TRUE,colWithLongName2,FALSE)",
+            30
+        )
+        .unwrap(),
+        "=SORT(\n  A2:C99,\n  colWithLongName1, TRUE,\n  colWithLongName2, FALSE\n)\n"
+    );
+    assert_eq!(
+        fmt_w("=SORTN(A2:C99,5,0,colWithLongName1,TRUE,col2,FALSE)", 30).unwrap(),
+        "=SORTN(\n  A2:C99,\n  5,\n  0,\n  colWithLongName1, TRUE,\n  col2,             FALSE\n)\n"
+    );
+    assert_eq!(
+        fmt_w(
+            "=AVERAGE.WEIGHTED(scoreRange1,weightRange1,scoreRange2,weightRange2)",
+            30
+        )
+        .unwrap(),
+        "=AVERAGE.WEIGHTED(\n  scoreRange1, weightRange1,\n  scoreRange2, weightRange2\n)\n"
+    );
+    assert_eq!(
+        fmt_w(
+            "=GETPIVOTDATA(\"total spend\",PivotSheet!A1,\"category\",catValue,\"region\",regionValue)",
+            40
+        )
+        .unwrap(),
+        "=GETPIVOTDATA(\n  \"total spend\",\n  PivotSheet!A1,\n  \"category\", catValue,\n  \"region\",   regionValue\n)\n"
+    );
+    // COUNTUNIQUEIFS is Sheets' sixth *IFS aggregation, same lead-1 shape
+    assert_eq!(
+        fmt_w(
+            "=COUNTUNIQUEIFS(bookingIds,creationDate,\"<\" & cutoffDate,checkIn,\"<=\" & endDate)",
+            40
+        )
+        .unwrap(),
+        "=COUNTUNIQUEIFS(\n  bookingIds,\n  creationDate, \"<\" & cutoffDate,\n  checkIn,      \"<=\" & endDate\n)\n"
+    );
+    // short forms stay inline
+    assert_eq!(fmt("=SORT(A2:C9, 1, TRUE)"), "=SORT(A2:C9, 1, TRUE)\n");
+}
+
 /// Pair layout renders keys inline, so a breakable key that overflows the
 /// width — a criteria range built from a call — sends the whole group to
 /// the plain per-argument layout, where the key can wrap. An unbreakable
