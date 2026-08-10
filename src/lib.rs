@@ -1081,28 +1081,52 @@ fn pair_lead(name_upper: &str) -> Option<usize> {
     }
 }
 
-/// Whether every pair key can sit inline at `arg_indent`, which pair layout
-/// requires — it renders keys inline unconditionally. A key that overflows
-/// the width *and* would get narrower broken (a criteria range built from a
-/// call, say `INDIRECT(…)`) sends the group to the plain per-argument
-/// layout instead, where it can wrap. An unbreakable oversized key — a long
-/// `LET` binding name — changes nothing by falling back, so it keeps pair
-/// layout and overshoots, exactly like any other unbreakable token.
-fn pair_keys_render_inline(g: &Group, lead: usize, arg_indent: usize, width: usize) -> bool {
+/// Whether pair layout is usable for this break, or the group should take
+/// the plain per-argument layout instead. Pair layout renders each key
+/// inline and pins its value beside it, so two shapes it cannot handle
+/// send the group to the plain layout, where every piece can wrap:
+///
+///   - a key that overflows the width *and* would get narrower broken —
+///     a criteria range built from a call, say `INDIRECT(…)`;
+///   - a (key, value) line that overflows while the plain layout fits —
+///     two long-but-unbreakable names that are fine on separate lines.
+///
+/// When neither layout can make the group fit — a lone `LET` binding name
+/// longer than the width — pair layout stays: falling back would tear the
+/// pair apart without fixing the overshoot, and width is a target, not a
+/// ceiling.
+fn pair_layout_fits(g: &Group, lead: usize, arg_indent: usize, width: usize) -> bool {
     let n = g.args.len();
     let pair_count = (n - lead) / 2;
-    (0..pair_count).all(|p| {
+    let keys_inline = (0..pair_count).all(|p| {
         let key = &g.args[lead + p * 2];
         let inline_end = arg_indent + cols(&render_inline(key, false).0);
         inline_end + 2 <= width || min_items_width(key, arg_indent).widest >= inline_end
-    })
+    });
+    if !keys_inline {
+        return false;
+    }
+    if min_pairs_width(g, lead, arg_indent) <= width {
+        return true;
+    }
+    // Pairs overflow: fall back only if the plain layout genuinely fits.
+    let plain = g
+        .args
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| !a.is_empty())
+        .map(|(i, a)| min_items_width(a, arg_indent).with_sep(sep_len(g, i)))
+        .max()
+        .unwrap_or(arg_indent);
+    plain > width
 }
 
 /// `LET` always breaks, however short it is. It exists to name intermediate
 /// values for readability, so collapsing one onto a single line defeats the
-/// reason it was written. Ordinary short calls (`SUM(a, b)`) still stay inline.
+/// reason it was written. Ordinary short calls (`SUM(a, b)`) still stay
+/// inline — including a bound user function that happens to be named `let`.
 fn always_breaks(g: &Group) -> bool {
-    g.name_upper() == "LET" && g.args.len() >= 3
+    !g.bound_head && g.name_upper() == "LET" && g.args.len() >= 3
 }
 
 /// A blank line between arguments is an explicit grouping the author wrote,
@@ -1132,9 +1156,10 @@ fn contains_authored_grouping(items: &[Node]) -> bool {
 
 /// A broken `LAMBDA` always gives its body its own block, even when the body
 /// would fit on one line. Keeps `LAMBDA(x, y, IF(...))` readable rather than
-/// trailing a dangling close paren.
+/// trailing a dangling close paren. A bound user function named `lambda`
+/// has no body argument, so the rule skips it.
 fn force_arg_break(g: &Group, arg_index: usize) -> bool {
-    g.name_upper() == "LAMBDA" && g.args.len() > 1 && arg_index + 1 == g.args.len()
+    !g.bound_head && g.name_upper() == "LAMBDA" && g.args.len() > 1 && arg_index + 1 == g.args.len()
 }
 
 /// Positions of the *spaced* binary operators in a flat sequence — the only
@@ -1303,7 +1328,7 @@ fn layout_group(
 
     if !g.is_array() && !g.bound_head {
         if let Some(lead) = pair_lead(&g.name_upper()) {
-            if g.args.len() > lead + 1 && pair_keys_render_inline(g, lead, arg_indent, width) {
+            if g.args.len() > lead + 1 && pair_layout_fits(g, lead, arg_indent, width) {
                 return layout_pairs(g, &open, lead, indent, width);
             }
         }
