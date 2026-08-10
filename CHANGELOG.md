@@ -3,6 +3,26 @@
 All notable changes to gsfmt. Versions follow [SemVer](https://semver.org);
 entries mirror the [GitHub release notes](https://github.com/colinperel/gsfmt/releases).
 
+## v0.5.0 — 2026-08-10
+
+Feature release: in-place formatting and the completed pair-shaped
+builtin set. Output-affecting only for broken input of the five newly
+pair-shaped functions.
+
+### Feature
+
+- **`--write` / `-i`** — format any number of FILEs in place:
+  already-clean files untouched; changed files replaced crash-safely
+  via a unique exclusively-created sibling temp carrying the original's
+  permission bits (created with the source mode on Unix — no
+  world-readable window); per-file error reporting; exit 2 on any parse
+  failure, 1 on any I/O failure. Replacement is `sed -i`-like (new
+  inode): ownership, ACLs, and extended attributes do not carry.
+- **Pair layout for the remaining pair-shaped builtins** —
+  `COUNTUNIQUEIFS` and `SORT` (lead 1), `GETPIVOTDATA` (lead 2),
+  `SORTN` (lead 3), `AVERAGE.WEIGHTED` (lead 0), completing the
+  documented Sheets set.
+
 ## v0.4.0 — 2026-08-10
 
 Output-affecting release: broken `*IFS` aggregation calls now format
