@@ -22,7 +22,10 @@ OPTIONS:
     -i, --write         Rewrite FILEs in place instead of printing to
                         stdout. A file whose formatting is already clean is
                         left untouched. Errors are reported per file and the
-                        remaining files still format.
+                        remaining files still format. A changed file is
+                        replaced (new inode), like `sed -i`: permission bits
+                        are preserved; ownership, ACLs, and extended
+                        attributes are not.
     -w, --width <N>     Target line width before breaking
     -d, --decimal <K>   Decimal mark: `dot` (1.5, args by `,`) or
                         `comma` (1,5, args by `;`). Default: dot
@@ -313,10 +316,14 @@ enum WriteError {
 /// The temp file is opened with `create_new`, which refuses to follow an
 /// existing file *or symlink* at the candidate path — a predictable fixed
 /// sidecar name could be pre-placed to make this clobber an unrelated
-/// file. It also carries the original's permission bits before the rename:
-/// a fresh file gets the process umask, and a `0600` formula must not
-/// come back `0644`. Ownership, ACLs, and extended attributes are beyond
-/// what std can carry and follow the umask'd temp file.
+/// file. On Unix the temp is *created* with the original's mode (the
+/// umask can only narrow that, never widen it), so no window exists where
+/// a `0600` formula's fresh copy sits world-readable while its content is
+/// written; the exact bits are then restored before the rename. Elsewhere
+/// the original's permissions are applied right after creation, before
+/// any content lands. Ownership, ACLs, and extended attributes are beyond
+/// what std can carry — `--help` documents the replacement as
+/// `sed -i`-like.
 fn write_in_place(
     path: &str,
     render: &impl Fn(&str) -> Result<String, gsfmt::Error>,
@@ -330,15 +337,24 @@ fn write_in_place(
     let perms = std::fs::metadata(path)
         .map_err(|e| io(e, "stat"))?
         .permissions();
+    let mut open_opts = std::fs::OpenOptions::new();
+    open_opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        open_opts.mode(perms.mode());
+    }
     let mut tmp: Option<String> = None;
     for n in 0u32..100 {
         let cand = format!("{path}.gsfmt-{}-{n}~", std::process::id());
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&cand)
-        {
+        match open_opts.open(&cand) {
             Ok(mut f) => {
+                #[cfg(not(unix))]
+                if let Err(e) = f.set_permissions(perms.clone()) {
+                    drop(f);
+                    let _ = std::fs::remove_file(&cand);
+                    return Err(io(e, "chmod"));
+                }
                 if let Err(e) = f.write_all(out.as_bytes()) {
                     drop(f);
                     let _ = std::fs::remove_file(&cand);
