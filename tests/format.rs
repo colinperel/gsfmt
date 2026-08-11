@@ -1265,18 +1265,54 @@ fn the_leading_equals_counts_against_the_width() {
 /// parse error while sitting far above any real formula.
 #[test]
 fn nesting_beyond_the_cap_is_rejected_not_fatal() {
-    let deep = format!("={}1{}", "(".repeat(201), ")".repeat(201));
-    let e = fmt_w(&deep, WIDTH).expect_err("should reject depth 201");
+    let deep = format!("={}1{}", "(".repeat(101), ")".repeat(101));
+    let e = fmt_w(&deep, WIDTH).expect_err("should reject depth 101");
     assert!(e.msg.contains("nesting"), "{}", e.msg);
 
-    let ok = format!("={}1{}", "(".repeat(199), ")".repeat(199));
+    let ok = format!("={}1{}", "(".repeat(99), ")".repeat(99));
     let start = std::time::Instant::now();
-    assert!(fmt_w(&ok, WIDTH).is_ok(), "depth 199 must still format");
+    assert!(fmt_w(&ok, WIDTH).is_ok(), "depth 99 must still format");
     let elapsed = start.elapsed();
     assert!(
         elapsed < std::time::Duration::from_secs(5),
         "formatting at the depth cap took {elapsed:?}"
     );
+}
+
+/// Pair layout (`LET`/`IFS`/`SWITCH`) re-measures its subtree at every
+/// level, so its cost is roughly cubic in depth — the worst shape the cap
+/// has to bound. At the cap it takes ~1.6s in a debug build (~0.45s
+/// release); the cap used to sit at 200, where the same shape took ~4s
+/// *release* — an editor freeze on save that the paren-tower test above is
+/// far too cheap a shape to notice. The bound is loose on purpose: it is
+/// not a benchmark, it only has to be unreachable for the next power of
+/// depth, so a loaded CI machine cannot make it flake.
+#[test]
+fn pair_nesting_at_the_cap_stays_fast() {
+    let mut inner = String::from("1");
+    for _ in 0..99 {
+        inner = format!("LET(aaaaaaaaaaaaaaaa, SUM(A1:A100)+{inner}, x)");
+    }
+    let src = format!("={inner}");
+
+    let start = std::time::Instant::now();
+    assert!(fmt_w(&src, WIDTH).is_ok(), "depth-99 LET chain must format");
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "pair layout at the depth cap took {elapsed:?} — the cubic cost regressed"
+    );
+}
+
+/// A UTF-8 BOM is a file-encoding artifact, not formula text: it is
+/// stripped rather than rejected, and output never carries one, so a BOM'd
+/// file formats identically to its clean twin (and a second pass is a
+/// no-op).
+#[test]
+fn a_leading_bom_is_stripped_not_rejected() {
+    assert_eq!(fmt("\u{feff}=SUM( 1,2 )"), "=SUM(1, 2)\n");
+    assert_eq!(min("\u{feff}=SUM( 1,2 )"), "=SUM(1,2)\n");
+    assert_eq!(fmt("\u{feff}"), "");
 }
 
 // ─────────────────────────────────────────────────── table references ──

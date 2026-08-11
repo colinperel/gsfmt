@@ -23,7 +23,9 @@
 //! itself does on entry: in the dot locale, `;` argument separators are
 //! rewritten to `,` (see `normalize_separators`; array row separators
 //! are semantic and stay untouched), and — opt-in — call heads are
-//! uppercased (see `uppercase_function_heads`).
+//! uppercased (see `uppercase_function_heads`). A leading UTF-8 BOM is
+//! outside the contract entirely: it is a file-encoding artifact, not a
+//! token, and both entry points drop it (see `strip_bom`).
 
 use std::fmt;
 
@@ -91,9 +93,11 @@ const ALIGN_MAX: usize = 40;
 /// regression test uses forty. The cap exists because parsing recurses per
 /// level (unbounded depth overflows the stack around ten thousand) and
 /// layout cost grows super-linearly with depth, so a hostile paren tower
-/// could hang an editor on save. Two hundred keeps the worst case well
+/// could hang an editor on save. The worst measured shape is pair layout
+/// (nested `LET`), whose cost is roughly cubic in depth: ~0.45s at depth
+/// 100 in a release build, ~4s at 199. One hundred keeps that worst case
 /// under half a second.
-const MAX_DEPTH: usize = 200;
+const MAX_DEPTH: usize = 100;
 
 // ───────────────────────────────────────────────────────────── errors ──
 
@@ -718,6 +722,15 @@ fn guard_minified(out: &mut String, next: &str) {
     {
         out.push(' ');
     }
+}
+
+/// Drop a leading UTF-8 BOM. It is an artifact of the file's encoding, not
+/// formula text — Windows editors and spreadsheet exports routinely prepend
+/// one, and the tokenizer would otherwise reject the whole formula over it.
+/// It is stripped, not preserved: output is identical whether or not the
+/// source carried one.
+fn strip_bom(src: &str) -> &str {
+    src.strip_prefix('\u{feff}').unwrap_or(src)
 }
 
 /// Render a sequence on one line, also reporting where each item starts.
@@ -1525,12 +1538,14 @@ fn split_leading_eq(toks: &[Token]) -> (bool, &[Token]) {
 /// separators normalize to `,` (see `normalize_separators`), and under
 /// [`Options::uppercase_functions`] call heads are uppercased (see
 /// `uppercase_function_heads`). A newline inside a string literal is
-/// content and survives untouched.
+/// content and survives untouched. A leading UTF-8 BOM is a file-encoding
+/// artifact, not a token, and is dropped.
 ///
 /// # Errors
 ///
 /// Returns an error if the formula cannot be tokenized or parsed.
 pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
+    let src = strip_bom(src);
     let width = opts.width;
     if src.trim().is_empty() {
         return Ok(String::new());
@@ -1577,7 +1592,8 @@ pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
 ///
 /// A newline inside a string literal is content, not layout, and is
 /// preserved — such a formula minifies to more than one physical line.
-/// Dot-locale `;` argument separators normalize to `,` here too, and
+/// Dot-locale `;` argument separators normalize to `,` here too, a
+/// leading UTF-8 BOM is dropped here too, and
 /// [`Options::uppercase_functions`] applies here too, so `minify` and
 /// [`format()`] always agree on token text.
 ///
@@ -1585,6 +1601,7 @@ pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
 ///
 /// Returns an error if the formula cannot be tokenized or parsed.
 pub fn minify(src: &str, opts: &Options) -> Result<String, Error> {
+    let src = strip_bom(src);
     if src.trim().is_empty() {
         return Ok(String::new());
     }
