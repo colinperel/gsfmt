@@ -16,8 +16,9 @@ USAGE:
     With --write, formats each FILE in place instead (stdin not allowed);
     several FILEs are only accepted together with --write. A FILE that is
     a directory needs --write and expands to every `.gsfx` file beneath
-    it, recursively: hidden entries are skipped and symlinked directories
-    are not followed.
+    it, recursively: hidden entries are skipped, and the walk never
+    follows a symlinked directory — though naming one on the command
+    line expands it, like `find -H`: an explicit argument is intent.
 
 OPTIONS:
     -m, --minify        Collapse the formula onto a single line (a newline
@@ -308,6 +309,10 @@ fn write_files(
     let mut files: Vec<std::path::PathBuf> = Vec::new();
     let mut worst = 0u8;
     for p in inputs.iter().flatten() {
+        // Deliberately `metadata`, not `symlink_metadata`: a directory
+        // symlink NAMED as an argument is expanded (`find -H` semantics —
+        // an explicit argument is intent), while the walk below never
+        // follows one it merely encounters.
         if std::fs::metadata(p).is_ok_and(|m| m.is_dir()) {
             // Traversal failures (an unreadable subtree, a vanished entry)
             // are reported like any other per-file error: the rest of the

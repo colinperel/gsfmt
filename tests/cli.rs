@@ -355,6 +355,26 @@ fn write_mode_expands_directories() {
         assert_eq!(out.code, 0, "stderr: {}", out.stderr);
         assert_eq!(std::fs::read_to_string(&top).unwrap(), "=sum(A1, B2)\n");
         assert_eq!(std::fs::read_to_string(&nested).unwrap(), "=sum(C3)\n");
+
+        // a directory symlink NAMED as the argument is expanded — an
+        // explicit argument is intent (`find -H` semantics), unlike one
+        // the walk merely encounters
+        let real = std::env::temp_dir().join("gsfmt-cli-symlink-target");
+        let _ = std::fs::remove_dir_all(&real);
+        std::fs::create_dir_all(&real).unwrap();
+        let via_link = real.join("t.gsfx");
+        std::fs::write(&via_link, "=sum( D4 )").unwrap();
+        let alias = std::env::temp_dir().join("gsfmt-cli-symlink-alias");
+        let _ = std::fs::remove_file(&alias);
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+
+        let out = run(&["--write", alias.to_str().unwrap()], &[], "");
+        assert_eq!(out.code, 0, "stderr: {}", out.stderr);
+        assert_eq!(
+            std::fs::read_to_string(&via_link).unwrap(),
+            "=sum(D4)\n",
+            "an explicitly named directory symlink must expand"
+        );
     }
 }
 
