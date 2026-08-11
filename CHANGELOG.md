@@ -3,6 +3,35 @@
 All notable changes to gsfmt. Versions follow [SemVer](https://semver.org);
 entries mirror the [GitHub release notes](https://github.com/colinperel/gsfmt/releases).
 
+## v0.7.0 — 2026-08-11
+
+Feature release: directory inputs and per-project configuration. Both
+additive — existing invocations format byte-identically, with one
+caveat: a `.gsfmt` file already sitting in an ancestor directory now
+silently applies (project-config discovery is new behavior on every
+run).
+
+### Features
+
+- **Directory arguments under `--write`** — a FILE that is a directory
+  expands to every `.gsfx` file beneath it, recursively and in sorted
+  order. Hidden entries are skipped; the walk never follows a symlinked
+  directory (a link cycle cannot hang it), though naming one on the
+  command line expands it, like `find -H`. Traversal failures are
+  reported per path while the rest of the tree still formats, and
+  discovered paths stay `PathBuf` end to end so a non-UTF-8 filename
+  formats in place rather than through a lossy copy. Without `--write`,
+  a directory is rejected up front with a pointer to the flag.
+
+- **Per-project config via `.gsfmt`** — the nearest `.gsfmt` walking up
+  from the first FILE (from the current directory when reading stdin)
+  supplies settings in the same `key = value` format as the user
+  config. Resolution is per key: flag, then `$GSFMT_<KEY>`, then
+  project `.gsfmt`, then user config, then the default — so a
+  comma-locale spreadsheet's checkout can pin `decimal` in-repo. The
+  anchor is canonicalized first: a relative `../sibling` path cannot
+  pick up the invocation directory's config.
+
 ## v0.6.0 — 2026-08-10
 
 Output-affecting release: broken chain tails now format differently.
