@@ -12,6 +12,7 @@ gsfmt formula.gsfx           # format to stdout (stdin when no file)
 gsfmt --minify formula.gsfx  # one line, ready to paste into Sheets
 gsfmt --width 100 -          # format stdin at width 100
 gsfmt --write *.gsfx         # format files in place (clean ones untouched)
+gsfmt --write formulas/      # every .gsfx beneath the directory, recursively
 ```
 
 Formatting is idempotent (formatting formatted output is a no-op) and
