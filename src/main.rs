@@ -29,7 +29,8 @@ OPTIONS:
                         remaining files still format. A changed file is
                         replaced (new inode), like `sed -i`: permission bits
                         are preserved; ownership, ACLs, and extended
-                        attributes are not.
+                        attributes are not. A symlink is resolved first, so
+                        its target is rewritten and the link survives.
     -w, --width <N>     Target line width before breaking
     -d, --decimal <K>   Decimal mark: `dot` (1.5, args by `,`) or
                         `comma` (1,5, args by `;`). Default: dot
@@ -270,13 +271,9 @@ fn run() -> Result<ExitCode, String> {
             continue;
         };
         match text {
-            "-h" | "--help" => {
-                print!("{USAGE}");
-                return Ok(ExitCode::SUCCESS);
-            }
+            "-h" | "--help" => return emit(USAGE),
             "-V" | "--version" => {
-                println!("gsfmt {}", env!("CARGO_PKG_VERSION"));
-                return Ok(ExitCode::SUCCESS);
+                return emit(&format!("gsfmt {}\n", env!("CARGO_PKG_VERSION")));
             }
             "-m" | "--minify" => minify = true,
             "-i" | "--write" => write = true,
@@ -343,16 +340,23 @@ fn run() -> Result<ExitCode, String> {
     };
 
     match render(&src) {
-        Ok(out) => {
-            std::io::stdout()
-                .write_all(out.as_bytes())
-                .map_err(|e| format!("stdout: {e}"))?;
-            Ok(ExitCode::SUCCESS)
-        }
+        Ok(out) => emit(&out),
         Err(e) => {
             eprintln!("gsfmt: {e}");
             Ok(ExitCode::from(2))
         }
+    }
+}
+
+/// Write to stdout, treating a closed pipe as success: `gsfmt f | head`
+/// closing the read end early is the reader's business, not an error — a
+/// filter must die silently there, and `print!`-style macros would panic
+/// instead.
+fn emit(text: &str) -> Result<ExitCode, String> {
+    match std::io::stdout().write_all(text.as_bytes()) {
+        Ok(()) => Ok(ExitCode::SUCCESS),
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(ExitCode::SUCCESS),
+        Err(e) => Err(format!("stdout: {e}")),
     }
 }
 
@@ -456,6 +460,14 @@ fn collect_gsfx(
 /// changed one is written to a sibling temp file and renamed over the
 /// original, so a crash mid-write cannot leave a truncated formula behind.
 ///
+/// The path is canonicalized first, so naming a symlink rewrites its
+/// *target* and the link survives — the rename-over replacement would
+/// otherwise replace the link itself with a regular file and leave the
+/// target untouched (GNU `sed -i` behavior, but a surprise for the
+/// directory walk, which deliberately collects symlinked `.gsfx` files).
+/// Canonicalizing also puts the temp file beside the real target, on its
+/// filesystem, keeping the rename atomic.
+///
 /// The temp file is opened with `create_new`, which refuses to follow an
 /// existing file *or symlink* at the candidate path — a predictable fixed
 /// sidecar name could be pre-placed to make this clobber an unrelated
@@ -473,12 +485,17 @@ fn write_in_place(
 ) -> Result<(), WriteError> {
     let io =
         |e: std::io::Error, what: &str| WriteError::Io(format!("{}: {what}: {e}", path.display()));
-    let src = std::fs::read_to_string(path).map_err(|e| io(e, "read"))?;
+    // Resolve before the first read: read, stat, and the final rename must
+    // all address the same file, or a link retargeted mid-run would get
+    // bytes read from its old target renamed over its new one. Errors keep
+    // naming the path the user gave; only the machinery uses `real`.
+    let real = std::fs::canonicalize(path).map_err(|e| io(e, "resolve"))?;
+    let src = std::fs::read_to_string(&real).map_err(|e| io(e, "read"))?;
     let out = render(&src).map_err(WriteError::Parse)?;
     if out == src {
         return Ok(());
     }
-    let perms = std::fs::metadata(path)
+    let perms = std::fs::metadata(&real)
         .map_err(|e| io(e, "stat"))?
         .permissions();
     let mut open_opts = std::fs::OpenOptions::new();
@@ -490,14 +507,14 @@ fn write_in_place(
     }
     let mut tmp: Option<std::path::PathBuf> = None;
     for n in 0u32..100 {
-        // The original name plus a suffix, kept as OsString end to end so a
+        // The resolved name plus a suffix, kept as OsString end to end so a
         // non-UTF-8 filename lands back on the same file, never a lossy
         // `�`-mangled sibling.
-        let mut name = path
+        let mut name = real
             .file_name()
             .map_or_else(Default::default, std::ffi::OsStr::to_os_string);
         name.push(format!(".gsfmt-{}-{n}~", std::process::id()));
-        let cand = path.with_file_name(name);
+        let cand = real.with_file_name(name);
         match open_opts.open(&cand) {
             Ok(mut f) => {
                 #[cfg(not(unix))]
@@ -526,7 +543,7 @@ fn write_in_place(
     };
     let finish = std::fs::set_permissions(&tmp, perms)
         .map_err(|e| io(e, "chmod"))
-        .and_then(|()| std::fs::rename(&tmp, path).map_err(|e| io(e, "rename")));
+        .and_then(|()| std::fs::rename(&tmp, &real).map_err(|e| io(e, "rename")));
     if finish.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }

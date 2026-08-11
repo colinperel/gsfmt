@@ -22,9 +22,18 @@ entry: in the dot locale, `;` argument separators are normalized to `,`
 (array row separators like `{1;2}` are untouched), and with
 `--uppercase` function names are rewritten to uppercase (`sum(` →
 `SUM(`; names bound by LET or LAMBDA keep their authored case, since
-those are user identifiers, not builtins). Table references
-(`Table1[Column 1]`, `.[chip]` postfixes) are treated as opaque atoms —
-laid out but never reflowed internally.
+those are user identifiers, not builtins). A leading UTF-8 BOM is a
+file-encoding artifact, not formula text, and is dropped. Table
+references (`Table1[Column 1]`, `.[chip]` postfixes) are treated as
+opaque atoms — laid out but never reflowed internally.
+
+The same opacity applies to language embedded *inside* a string —
+`QUERY`'s SELECT text is the common case. String bytes are content, so
+gsfmt never reflows them: format the embedded query by hand (real
+newlines are fine) and both `format` and `--minify` carry it through
+byte-for-byte. One consequence: the query's interior indentation is
+absolute, so it does not re-align when the surrounding call moves to a
+different depth.
 
 ## Configuration
 

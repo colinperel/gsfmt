@@ -546,6 +546,65 @@ fn a_non_utf8_argument_is_an_io_error_not_a_panic() {
     assert!(out.stdout.is_empty());
 }
 
+/// A filter dies silently when its reader goes away: `gsfmt f | head`
+/// closing the pipe early is success (exit 0, no stderr), never an error
+/// report and never a panic. The child blocks reading stdin until this
+/// test has already closed the read end of its stdout, so the eventual
+/// output write deterministically hits the broken pipe.
+#[test]
+fn a_closed_stdout_pipe_is_success_not_an_error() {
+    let mut cmd = Command::new(BIN);
+    cmd.current_dir(std::env::temp_dir())
+        .env("XDG_CONFIG_HOME", "/nonexistent-gsfmt-test")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, _) in std::env::vars() {
+        if key.starts_with("GSFMT_") {
+            cmd.env_remove(key);
+        }
+    }
+    let mut child = cmd.spawn().expect("spawn gsfmt");
+    drop(child.stdout.take());
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"=SUM( A1,B2 )")
+        .expect("write stdin");
+    let out = child.wait_with_output().expect("wait");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "stderr: {stderr}");
+    assert!(stderr.is_empty(), "stderr: {stderr}");
+}
+
+/// Naming a symlink formats its *target*: the link survives and the real
+/// file receives the new bytes. Without resolving first, the rename-over
+/// replacement turns the link into a regular file and strands the target
+/// unformatted.
+#[cfg(unix)]
+#[test]
+fn write_mode_rewrites_a_symlinks_target_and_keeps_the_link() {
+    let dir = std::env::temp_dir().join("gsfmt-cli-symlink-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let real = dir.join("real.gsfx");
+    let link = dir.join("link.gsfx");
+    std::fs::write(&real, "=sum( A1,B2 )").unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    let out = run(&["--write", link.to_str().unwrap()], &[], "");
+    assert_eq!(out.code, 0, "stderr: {}", out.stderr);
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the link itself must survive"
+    );
+    assert_eq!(std::fs::read_to_string(&real).unwrap(), "=sum(A1, B2)\n");
+}
+
 /// The in-place replacement must not disturb neighbours or metadata: a
 /// pre-existing sidecar file survives (the temp name is created
 /// exclusively, never a fixed predictable path), and the original's
