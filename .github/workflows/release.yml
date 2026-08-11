@@ -125,6 +125,10 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Create release with CHANGELOG notes
+        # Explicit `shell: bash` is what turns on pipefail — the default
+        # unspecified-shell is plain `bash -e`, which lets a failed producer
+        # in a pipeline pass unnoticed.
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -146,14 +150,19 @@ jobs:
           # Idempotent against a partial previous run: `gh release create`
           # with assets makes a draft, uploads, then publishes — a failed
           # upload strands the draft, and a blind re-create would fail (or
-          # stack a second draft). Sweep leftover drafts for this tag, then
-          # create or re-upload depending on what survived.
-          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
-            --jq '.[] | select(.draft and .tag_name == env.TAG) | .id' |
-          while read -r id; do
+          # stack a second draft). One successfully completed list query is
+          # the sole authority for both draft and published state, so a
+          # lookup failure (auth, network) fails the job instead of being
+          # read as "release absent" and reaching create. --paginate emits
+          # one JSON array per page; jq iterates each, so `.[]` sees every
+          # release across pages.
+          releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases")
+          draft_ids=$(jq -r '.[] | select(.draft and .tag_name == env.TAG) | .id' <<<"$releases")
+          for id in $draft_ids; do
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
           done
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          if jq -e '.[] | select((.draft | not) and .tag_name == env.TAG)' \
+              <<<"$releases" >/dev/null; then
             gh release upload "$TAG" --clobber dist/*
           else
             gh release create "$TAG" --verify-tag --title "$TAG" \
