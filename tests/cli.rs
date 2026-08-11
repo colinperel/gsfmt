@@ -524,6 +524,28 @@ fn non_utf8_filenames_format_in_place() {
     );
 }
 
+/// A non-UTF-8 FILE argument must land on the ordinary per-file error path,
+/// not panic inside argv decoding (`env::args` aborts with exit 101 and a
+/// backtrace pointer before `main` sees the argument). The file need not
+/// exist — the crash was in decoding, before any I/O.
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_argument_is_an_io_error_not_a_panic() {
+    use std::os::unix::ffi::OsStrExt;
+    let out = Command::new(BIN)
+        .arg(std::ffi::OsStr::from_bytes(b"no-such-\xff\xfe.gsfx"))
+        .current_dir(std::env::temp_dir())
+        .env("XDG_CONFIG_HOME", "/nonexistent-gsfmt-test")
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn gsfmt");
+    assert_eq!(out.status.code(), Some(1), "want a plain IO error, not 101");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.starts_with("gsfmt: "), "stderr: {stderr}");
+    assert!(!stderr.contains("panicked"), "stderr: {stderr}");
+    assert!(out.stdout.is_empty());
+}
+
 /// The in-place replacement must not disturb neighbours or metadata: a
 /// pre-existing sidecar file survives (the temp name is created
 /// exclusively, never a fixed predictable path), and the original's

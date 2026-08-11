@@ -80,11 +80,22 @@ fn gen_expr(rng: &mut Rng, depth: usize) -> String {
         5 => format!("({})", gen_expr(rng, depth + 1)),
         6 => format!("-{}", gen_expr(rng, depth + 1)),
         // Adjacent operands: invalid in Sheets, but the formatter must
-        // preserve the two tokens rather than fuse them.
+        // preserve the two tokens rather than fuse them. The second operand
+        // is sometimes a call, because a leaf glued onto a call head is a
+        // distinct fusion (`A1 SUM(1)` → the single call `A1SUM(1)`) that
+        // plain atom–atom adjacency cannot catch.
         7 => format!(
             "{} {}",
             ATOMS[rng.below(ATOMS.len())],
-            ATOMS[rng.below(ATOMS.len())]
+            if rng.chance(40) {
+                format!(
+                    "{}({})",
+                    HEADS[rng.below(HEADS.len())],
+                    gen_expr(rng, depth + 1)
+                )
+            } else {
+                ATOMS[rng.below(ATOMS.len())].to_string()
+            }
         ),
         _ => {
             let head = HEADS[rng.below(HEADS.len())];
@@ -104,13 +115,30 @@ fn gen_expr(rng: &mut Rng, depth: usize) -> String {
     }
 }
 
+/// Token texts of a formula. Whitespace is not a token, so any rendering of
+/// a formula must reproduce this stream *exactly* — comparing it against the
+/// source is the direct form of the byte-preservation contract. (The
+/// minify-vs-minify comparison below cannot stand alone: a fusion bug shared
+/// by both `format` and `minify` cancels out of it.) The generator emits
+/// only `,` argument separators, so the one sanctioned rewrite — `;` → `,`
+/// in dot-locale call arguments — never fires here and plain equality holds.
+fn token_texts(src: &str) -> Vec<String> {
+    gsfmt::tokenize(src, gsfmt::Decimal::Dot)
+        .expect("both inputs to this comparison already lexed once")
+        .into_iter()
+        .map(|t| t.text)
+        .collect()
+}
+
 /// The invariants, per formula and width:
 ///   1. formatting succeeds (the generator emits only lexable text)
 ///   2. `format(format(x)) == format(x)`         — idempotence
-///   3. `minify(format(x)) == minify(x)`          — semantic preservation
-///   4. `minify(minify(x)) == minify(x)`          — minify idempotence
-///   5. formatted output re-parses (2 and 3 both re-run the full pipeline)
-///   6. no output line ends in whitespace
+///   3. `tokens(format(x)) == tokens(x)`          — token preservation
+///   4. `tokens(minify(x)) == tokens(x)`          — token preservation
+///   5. `minify(format(x)) == minify(x)`          — semantic preservation
+///   6. `minify(minify(x)) == minify(x)`          — minify idempotence
+///   7. formatted output re-parses (2 and 5 both re-run the full pipeline)
+///   8. no output line ends in whitespace
 #[test]
 fn generated_formulas_hold_every_invariant() {
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
@@ -126,6 +154,12 @@ fn generated_formulas_hold_every_invariant() {
             skipped += 1;
             continue;
         };
+        let src_tokens = token_texts(&src);
+        assert_eq!(
+            token_texts(&min0),
+            src_tokens,
+            "minify changed the token stream (case {i}):\n{src}\n→\n{min0}"
+        );
         let min_twice = gsfmt::minify(&min0, &gsfmt::Options::default())
             .unwrap_or_else(|e| panic!("case {i}: minify output rejected: {e}\n{src}"));
         assert_eq!(min_twice, min0, "minify not idempotent (case {i}):\n{src}");
@@ -143,6 +177,11 @@ fn generated_formulas_hold_every_invariant() {
             assert_eq!(
                 twice, once,
                 "not idempotent (case {i}, width {width}):\n{src}"
+            );
+            assert_eq!(
+                token_texts(&once),
+                src_tokens,
+                "format changed the token stream (case {i}, width {width}):\n{src}\n→\n{once}"
             );
 
             let m = gsfmt::minify(&once, &gsfmt::Options::default())
