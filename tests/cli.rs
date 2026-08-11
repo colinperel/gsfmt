@@ -225,7 +225,11 @@ fn project_config_is_discovered_and_layered() {
 
     // project width=40 wins over user config width=100
     let out = run(&[file.to_str().unwrap()], &[("GSFMT_CONFIG", user)], "");
-    assert!(multiline(&out), "project must beat user config: {}", out.stdout);
+    assert!(
+        multiline(&out),
+        "project must beat user config: {}",
+        out.stdout
+    );
 
     // env still beats the project file
     let out = run(&[file.to_str().unwrap()], &[("GSFMT_WIDTH", "100")], "");
@@ -237,7 +241,42 @@ fn project_config_is_discovered_and_layered() {
 
     // and a cwd without a `.gsfmt` above it falls through to the user config
     let out = run(&[], &[("GSFMT_CONFIG", user)], f);
-    assert!(!multiline(&out), "no project file: user config applies: {}", out.stdout);
+    assert!(
+        !multiline(&out),
+        "no project file: user config applies: {}",
+        out.stdout
+    );
+}
+
+/// A relative FILE with `..` components resolves before the ancestor walk:
+/// the invocation directory's `.gsfmt` must not leak onto a sibling tree
+/// that is not actually below it.
+#[test]
+fn relative_anchor_does_not_leak_the_invocation_dirs_config() {
+    // 54 chars: fits at the default 82, breaks at 40.
+    let f = "=IFS(alpha, oneValue, beta, twoValue, gamma, threeVal)\n";
+    let root = std::env::temp_dir().join("gsfmt-cli-sibling-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let proj_a = root.join("proj-a");
+    let proj_b = root.join("proj-b");
+    std::fs::create_dir_all(&proj_a).unwrap();
+    std::fs::create_dir_all(&proj_b).unwrap();
+    std::fs::write(proj_a.join(".gsfmt"), "width = 40\n").unwrap();
+    std::fs::write(proj_b.join("f.gsfx"), f).unwrap();
+
+    let multiline = |o: &Out| o.stdout.lines().count() > 1;
+
+    // control: inside proj-a the config applies (stdin anchors at cwd)
+    let out = run_in(&proj_a, &[], &[], f);
+    assert!(multiline(&out), "control: {}", out.stdout);
+
+    // the sibling file must resolve `..` and never see proj-a's config
+    let out = run_in(&proj_a, &["../proj-b/f.gsfx"], &[], "");
+    assert!(
+        !multiline(&out),
+        "proj-a's .gsfmt leaked onto a sibling: {}",
+        out.stdout
+    );
 }
 
 #[test]

@@ -145,11 +145,17 @@ fn project_config(anchor: Option<&str>) -> Option<(std::path::PathBuf, String)> 
         Some(p) => std::env::current_dir().ok()?.join(p),
         None => std::env::current_dir().ok()?,
     };
-    let mut dir = if start.is_dir() {
+    let dir = if start.is_dir() {
         start.as_path()
     } else {
         start.parent()?
     };
+    // Canonicalized so `..` components resolve for real before the walk: a
+    // lexical climb would let `../sibling/f.gsfx` pass back through the
+    // invocation directory and pick up a `.gsfmt` that is not actually an
+    // ancestor of the file.
+    let canon = std::fs::canonicalize(dir).ok()?;
+    let mut dir = canon.as_path();
     loop {
         let cand = dir.join(".gsfmt");
         if let Ok(text) = std::fs::read_to_string(&cand) {
@@ -196,8 +202,7 @@ fn resolve_options(
 ) -> Result<gsfmt::Options, String> {
     let project = project_config(anchor);
     let user = config_text();
-    let cfg: Vec<&(std::path::PathBuf, String)> =
-        project.iter().chain(user.iter()).collect();
+    let cfg: Vec<&(std::path::PathBuf, String)> = project.iter().chain(user.iter()).collect();
     let width = resolve(
         width_flag,
         "GSFMT_WIDTH",
