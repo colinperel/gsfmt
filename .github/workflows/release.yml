@@ -15,8 +15,9 @@ on:
     tags:
       - "v*"
 
+# Read-only token everywhere except the release job, which uploads assets.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   guard:
@@ -113,6 +114,8 @@ jobs:
   release:
     name: GitHub release
     needs: binaries
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
