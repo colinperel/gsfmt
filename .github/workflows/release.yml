@@ -143,5 +143,19 @@ jobs:
             exit 1
           fi
           (cd dist && sha256sum -- * > SHA256SUMS)
-          gh release create "$TAG" --verify-tag --title "$TAG" \
-            --notes-file notes.md dist/*
+          # Idempotent against a partial previous run: `gh release create`
+          # with assets makes a draft, uploads, then publishes — a failed
+          # upload strands the draft, and a blind re-create would fail (or
+          # stack a second draft). Sweep leftover drafts for this tag, then
+          # create or re-upload depending on what survived.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq '.[] | select(.draft and .tag_name == env.TAG) | .id' |
+          while read -r id; do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" --clobber dist/*
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" \
+              --notes-file notes.md dist/*
+          fi
