@@ -35,6 +35,18 @@ byte-for-byte. One consequence: the query's interior indentation is
 absolute, so it does not re-align when the surrounding call moves to a
 different depth.
 
+## Installation
+
+```sh
+cargo install gsfmt --locked
+```
+
+Or grab a prebuilt binary from the
+[releases page](https://github.com/colinperel/gsfmt/releases) — Linux
+(x86_64/aarch64), macOS (Intel/Apple silicon), and Windows archives,
+each with a `SHA256SUMS` alongside. Building from a checkout works
+too (`cargo build --release`); the crate has zero dependencies.
+
 ## Configuration
 
 Resolved per setting from: flag → environment → project `.gsfmt` →
