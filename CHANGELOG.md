@@ -3,6 +3,27 @@
 All notable changes to gsfmt. Versions follow [SemVer](https://semver.org);
 entries mirror the [GitHub release notes](https://github.com/colinperel/gsfmt/releases).
 
+## v0.7.1 — 2026-08-11
+
+Distribution release: gsfmt is now on [crates.io](https://crates.io/crates/gsfmt)
+(`cargo install gsfmt --locked`) with prebuilt binaries for Linux
+(x86_64/aarch64), macOS (Intel/Apple silicon), and Windows attached to
+each GitHub release alongside a `SHA256SUMS`. No behavior changes —
+formatting output is byte-identical to v0.7.0.
+
+### Infrastructure
+
+- **Tag-triggered release workflow** — a `v*` tag builds all five
+  targets, publishes to crates.io only after every binary is green, and
+  creates the GitHub release with this file's matching section as the
+  body. A guard job refuses a tag that disagrees with Cargo.toml's
+  version, and the release step recovers cleanly from a partially
+  failed previous run.
+- **Registry metadata** — repository/readme/keywords/categories in
+  Cargo.toml; CI plumbing and the historical remediation plan are
+  excluded from the packaged crate.
+- **README** — new Installation section.
+
 ## v0.7.0 — 2026-08-11
 
 Feature release: directory inputs and per-project configuration. Both
