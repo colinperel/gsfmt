@@ -305,15 +305,23 @@ fn write_files(
     if inputs.iter().any(Option::is_none) {
         return Err("--write cannot read stdin; pass FILEs".into());
     }
-    let mut files: Vec<String> = Vec::new();
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    let mut worst = 0u8;
     for p in inputs.iter().flatten() {
         if std::fs::metadata(p).is_ok_and(|m| m.is_dir()) {
-            collect_gsfx(std::path::Path::new(p), &mut files)?;
+            // Traversal failures (an unreadable subtree, a vanished entry)
+            // are reported like any other per-file error: the rest of the
+            // tree and every other input still format.
+            let mut errors = Vec::new();
+            collect_gsfx(std::path::Path::new(p), &mut files, &mut errors);
+            for e in errors {
+                eprintln!("gsfmt: {e}");
+                worst = worst.max(1);
+            }
         } else {
-            files.push(p.clone());
+            files.push(p.into());
         }
     }
-    let mut worst = 0u8;
     for p in &files {
         if let Err(e) = write_in_place(p, render) {
             match e {
@@ -322,7 +330,7 @@ fn write_files(
                     worst = worst.max(1);
                 }
                 WriteError::Parse(e) => {
-                    eprintln!("gsfmt: {p}: {e}");
+                    eprintln!("gsfmt: {}: {e}", p.display());
                     worst = worst.max(2);
                 }
             }
@@ -334,29 +342,41 @@ fn write_files(
 /// Recursively collect every `.gsfx` file under `dir`, sorted by name so a
 /// run visits files in a deterministic order. Hidden entries are skipped
 /// and symlinked directories are not followed, so a link cycle cannot hang
-/// the walk; a symlink *to* a `.gsfx` file is still formatted.
-fn collect_gsfx(dir: &std::path::Path, out: &mut Vec<String>) -> Result<(), String> {
-    let ctx = |e: std::io::Error| format!("{}: {e}", dir.display());
-    let mut entries = std::fs::read_dir(dir)
-        .map_err(ctx)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(ctx)?;
+/// the walk; a symlink *to* a `.gsfx` file is still formatted. Failures
+/// land in `errors` and the walk keeps going, so one unreadable subtree
+/// cannot block the rest of the tree.
+fn collect_gsfx(
+    dir: &std::path::Path,
+    out: &mut Vec<std::path::PathBuf>,
+    errors: &mut Vec<String>,
+) {
+    let iter = match std::fs::read_dir(dir) {
+        Ok(iter) => iter,
+        Err(e) => {
+            errors.push(format!("{}: {e}", dir.display()));
+            return;
+        }
+    };
+    let mut entries = Vec::new();
+    for entry in iter {
+        match entry {
+            Ok(entry) => entries.push(entry),
+            Err(e) => errors.push(format!("{}: {e}", dir.display())),
+        }
+    }
     entries.sort_by_key(std::fs::DirEntry::file_name);
     for entry in entries {
-        if entry.file_name().to_string_lossy().starts_with('.') {
+        if entry.file_name().as_encoded_bytes().first() == Some(&b'.') {
             continue;
         }
         let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        if file_type.is_dir() {
-            collect_gsfx(&path, out)?;
-        } else if path.extension().is_some_and(|x| x == "gsfx") {
-            out.push(path.to_string_lossy().into_owned());
+        match entry.file_type() {
+            Err(e) => errors.push(format!("{}: {e}", path.display())),
+            Ok(ft) if ft.is_dir() => collect_gsfx(&path, out, errors),
+            Ok(_) if path.extension().is_some_and(|x| x == "gsfx") => out.push(path),
+            Ok(_) => {}
         }
     }
-    Ok(())
 }
 
 /// Format one file in place. Already-clean files are left untouched; a
@@ -375,10 +395,11 @@ fn collect_gsfx(dir: &std::path::Path, out: &mut Vec<String>) -> Result<(), Stri
 /// what std can carry — `--help` documents the replacement as
 /// `sed -i`-like.
 fn write_in_place(
-    path: &str,
+    path: &std::path::Path,
     render: &impl Fn(&str) -> Result<String, gsfmt::Error>,
 ) -> Result<(), WriteError> {
-    let io = |e: std::io::Error, what: &str| WriteError::Io(format!("{path}: {what}: {e}"));
+    let io =
+        |e: std::io::Error, what: &str| WriteError::Io(format!("{}: {what}: {e}", path.display()));
     let src = std::fs::read_to_string(path).map_err(|e| io(e, "read"))?;
     let out = render(&src).map_err(WriteError::Parse)?;
     if out == src {
@@ -394,9 +415,16 @@ fn write_in_place(
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         open_opts.mode(perms.mode());
     }
-    let mut tmp: Option<String> = None;
+    let mut tmp: Option<std::path::PathBuf> = None;
     for n in 0u32..100 {
-        let cand = format!("{path}.gsfmt-{}-{n}~", std::process::id());
+        // The original name plus a suffix, kept as OsString end to end so a
+        // non-UTF-8 filename lands back on the same file, never a lossy
+        // `�`-mangled sibling.
+        let mut name = path
+            .file_name()
+            .map_or_else(Default::default, std::ffi::OsStr::to_os_string);
+        name.push(format!(".gsfmt-{}-{n}~", std::process::id()));
+        let cand = path.with_file_name(name);
         match open_opts.open(&cand) {
             Ok(mut f) => {
                 #[cfg(not(unix))]
@@ -419,7 +447,8 @@ fn write_in_place(
     }
     let Some(tmp) = tmp else {
         return Err(WriteError::Io(format!(
-            "{path}: could not create a temporary file beside it"
+            "{}: could not create a temporary file beside it",
+            path.display()
         )));
     };
     let finish = std::fs::set_permissions(&tmp, perms)
