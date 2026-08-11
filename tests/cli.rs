@@ -16,8 +16,15 @@ struct Out {
 }
 
 fn run(args: &[&str], env: &[(&str, &str)], stdin: &str) -> Out {
+    // Run from the temp dir, not the repo checkout, so a stray `.gsfmt`
+    // in the developer's tree can't leak into stdin-anchored discovery.
+    run_in(&std::env::temp_dir(), args, env, stdin)
+}
+
+fn run_in(cwd: &std::path::Path, args: &[&str], env: &[(&str, &str)], stdin: &str) -> Out {
     let mut cmd = Command::new(BIN);
     cmd.args(args)
+        .current_dir(cwd)
         // Keep the developer's own ~/.config/gsfmt/config out of the test.
         .env("XDG_CONFIG_HOME", "/nonexistent-gsfmt-test")
         .stdin(Stdio::piped())
@@ -195,6 +202,42 @@ fn decimal_comes_from_the_config_file_too() {
         "=SUM(1,5;2,5)\n",
     );
     assert_eq!(out.stdout, "=SUM(1,5; 2,5)\n");
+}
+
+/// A project `.gsfmt` — the nearest one walking up from the FILE — beats
+/// the user config, while env and flag still beat the project file. Stdin
+/// anchors discovery at the current directory.
+#[test]
+fn project_config_is_discovered_and_layered() {
+    // 54 chars: fits at 82 and 100, breaks at 40.
+    let f = "=IFS(alpha, oneValue, beta, twoValue, gamma, threeVal)\n";
+    let root = std::env::temp_dir().join("gsfmt-cli-project-test");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("nested")).unwrap();
+    std::fs::write(root.join(".gsfmt"), "width = 40\n").unwrap();
+    let file = root.join("nested/f.gsfx");
+    std::fs::write(&file, f).unwrap();
+    let user = root.join("user-config");
+    std::fs::write(&user, "width = 100\n").unwrap();
+    let user = user.to_str().unwrap();
+
+    let multiline = |o: &Out| o.stdout.lines().count() > 1;
+
+    // project width=40 wins over user config width=100
+    let out = run(&[file.to_str().unwrap()], &[("GSFMT_CONFIG", user)], "");
+    assert!(multiline(&out), "project must beat user config: {}", out.stdout);
+
+    // env still beats the project file
+    let out = run(&[file.to_str().unwrap()], &[("GSFMT_WIDTH", "100")], "");
+    assert!(!multiline(&out), "env must beat project: {}", out.stdout);
+
+    // stdin anchors at the cwd
+    let out = run_in(&root, &[], &[("GSFMT_CONFIG", user)], f);
+    assert!(multiline(&out), "stdin must anchor at cwd: {}", out.stdout);
+
+    // and a cwd without a `.gsfmt` above it falls through to the user config
+    let out = run(&[], &[("GSFMT_CONFIG", user)], f);
+    assert!(!multiline(&out), "no project file: user config applies: {}", out.stdout);
 }
 
 #[test]

@@ -28,7 +28,8 @@ laid out but never reflowed internally.
 
 ## Configuration
 
-Resolved per setting from: flag → environment → config file → built-in.
+Resolved per setting from: flag → environment → project `.gsfmt` →
+user config file → built-in.
 
 | Setting | Flag | Env | Config key | Default |
 |---------|------|-----|------------|---------|
@@ -36,9 +37,15 @@ Resolved per setting from: flag → environment → config file → built-in.
 | decimal mark | `--decimal <dot\|comma>` | `$GSFMT_DECIMAL` | `decimal = <dot\|comma>` | `dot` |
 | uppercase functions | `--uppercase` | `$GSFMT_UPPERCASE` | `uppercase = <true\|false>` | `false` |
 
-The config file is `$GSFMT_CONFIG`, else
+The user config file is `$GSFMT_CONFIG`, else
 `$XDG_CONFIG_HOME/gsfmt/config`, else `~/.config/gsfmt/config` —
 `key = value` lines, `#` comments, unknown keys ignored.
+
+A project can pin its own settings in a `.gsfmt` file (same format),
+found by walking up from the first FILE argument — or from the current
+directory when reading stdin, which is what editor integrations hit.
+It beats the user config, so a comma-locale spreadsheet's checkout
+formats the same for everyone without env vars or flags.
 
 `decimal` decides what `,` means: under `dot`, arguments separate with
 `,`; under `comma` (de/fr/es locales), numbers use `1,5` and arguments
