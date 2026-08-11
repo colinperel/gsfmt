@@ -358,6 +358,70 @@ fn write_mode_expands_directories() {
     }
 }
 
+/// An unreadable subtree is a per-file-style error, not a fatal one: it is
+/// reported (exit 1) while the rest of the tree and other explicit inputs
+/// still format.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_subtree_does_not_block_other_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join("gsfmt-cli-unreadable-test");
+    let locked = dir.join("locked");
+    // restore perms from a previous run so the cleanup can see inside
+    let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("in.gsfx"), "=sum( A1 )").unwrap();
+    let sibling = dir.join("sibling.gsfx");
+    std::fs::write(&sibling, "=sum( A1,B2 )").unwrap();
+    let explicit = std::env::temp_dir().join("gsfmt-cli-unreadable-explicit.gsfx");
+    std::fs::write(&explicit, "=sum( C3 )").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let out = run(
+        &["--write", dir.to_str().unwrap(), explicit.to_str().unwrap()],
+        &[],
+        "",
+    );
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(out.code, 1, "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("locked"), "{}", out.stderr);
+    assert_eq!(
+        std::fs::read_to_string(&sibling).unwrap(),
+        "=sum(A1, B2)\n",
+        "the readable part of the tree must still format"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&explicit).unwrap(),
+        "=sum(C3)\n",
+        "an explicit file after a failing directory must still format"
+    );
+}
+
+/// A discovered filename that is not valid UTF-8 must format in place, not
+/// be skipped or written to a `�`-mangled sibling. Linux only: macOS
+/// filesystems reject non-UTF-8 names outright.
+#[cfg(target_os = "linux")]
+#[test]
+fn non_utf8_filenames_format_in_place() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = std::env::temp_dir().join("gsfmt-cli-non-utf8-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let name = std::ffi::OsStr::from_bytes(b"bad-\xff.gsfx");
+    let file = dir.join(name);
+    std::fs::write(&file, "=sum( A1,B2 )").unwrap();
+
+    let out = run(&["--write", dir.to_str().unwrap()], &[], "");
+    assert_eq!(out.code, 0, "stderr: {}", out.stderr);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "=sum(A1, B2)\n");
+    assert_eq!(
+        std::fs::read_dir(&dir).unwrap().count(),
+        1,
+        "no mangled sibling may appear next to the original"
+    );
+}
+
 /// The in-place replacement must not disturb neighbours or metadata: a
 /// pre-existing sidecar file survives (the temp name is created
 /// exclusively, never a fixed predictable path), and the original's
