@@ -49,7 +49,9 @@ WIDTH:
     Resolved from the first of these that is set (default 82):
       1. --width <N>
       2. $GSFMT_WIDTH
-      3. `width = <N>` in $GSFMT_CONFIG, else
+      3. `width = <N>` in the nearest `.gsfmt` walking up from the first
+         FILE (from the current directory when reading stdin)
+      4. `width = <N>` in $GSFMT_CONFIG, else
          $XDG_CONFIG_HOME/gsfmt/config, else ~/.config/gsfmt/config
 
 DECIMAL:
@@ -60,7 +62,16 @@ DECIMAL:
     rewrite. Under `dot`, a `;` between arguments is normalized to `,`,
     as Sheets itself does on entry (array rows keep their `;`). Resolved
     like width: --decimal, then $GSFMT_DECIMAL, then
-    `decimal = <dot|comma>` in the config file.
+    `decimal = <dot|comma>` in the project `.gsfmt`, then the user config
+    file.
+
+CONFIG FILES:
+    Two layers, same `key = value` format (`#` comments, unknown keys
+    ignored). A project `.gsfmt` — found by walking up from the first
+    FILE, or from the current directory for stdin — beats the user
+    config, so a checkout formats the same for everyone. Per key: flag,
+    then $GSFMT_<KEY>, then project `.gsfmt`, then user config, then
+    the default.
 
 EXIT CODES:
     0  success
@@ -123,12 +134,38 @@ fn config_text() -> Option<(std::path::PathBuf, String)> {
     Some((path, text))
 }
 
-/// Flag wins, then the environment, then the config file, then the default.
+/// Nearest `.gsfmt` walking up from `anchor` — the first FILE argument, or
+/// the current directory when reading stdin. Per-project settings (a
+/// comma-locale spreadsheet, a house width) live here and beat the user
+/// config, so a checkout formats the same for everyone.
+fn project_config(anchor: Option<&str>) -> Option<(std::path::PathBuf, String)> {
+    // Not `std::path::absolute`: that is stable since 1.79, above the MSRV.
+    let start = match anchor.map(std::path::Path::new) {
+        Some(p) if p.is_absolute() => p.to_path_buf(),
+        Some(p) => std::env::current_dir().ok()?.join(p),
+        None => std::env::current_dir().ok()?,
+    };
+    let mut dir = if start.is_dir() {
+        start.as_path()
+    } else {
+        start.parent()?
+    };
+    loop {
+        let cand = dir.join(".gsfmt");
+        if let Ok(text) = std::fs::read_to_string(&cand) {
+            return Some((cand, text));
+        }
+        dir = dir.parent()?;
+    }
+}
+
+/// Flag wins, then the environment, then the config files in order (project
+/// first, then user), then the default.
 fn resolve<T>(
     flag: Option<T>,
     env_key: &str,
     config_key: &str,
-    cfg: Option<&(std::path::PathBuf, String)>,
+    cfgs: &[&(std::path::PathBuf, String)],
     parse: impl Fn(&str) -> Result<T, String>,
     default: T,
 ) -> Result<T, String> {
@@ -141,7 +178,7 @@ fn resolve<T>(
             return parse(raw).map_err(|e| format!("{env_key}: {e}"));
         }
     }
-    if let Some((path, text)) = cfg {
+    for (path, text) in cfgs {
         if let Some(raw) = value_from_config(text, config_key) {
             return parse(raw).map_err(|e| format!("{}: {e}", path.display()));
         }
@@ -149,18 +186,23 @@ fn resolve<T>(
     Ok(default)
 }
 
-/// Resolve every setting through flag → environment → config file → default.
+/// Resolve every setting through flag → environment → project config →
+/// user config → default.
 fn resolve_options(
+    anchor: Option<&str>,
     width_flag: Option<usize>,
     decimal_flag: Option<gsfmt::Decimal>,
     uppercase_flag: Option<bool>,
 ) -> Result<gsfmt::Options, String> {
-    let cfg = config_text();
+    let project = project_config(anchor);
+    let user = config_text();
+    let cfg: Vec<&(std::path::PathBuf, String)> =
+        project.iter().chain(user.iter()).collect();
     let width = resolve(
         width_flag,
         "GSFMT_WIDTH",
         "width",
-        cfg.as_ref(),
+        &cfg,
         |raw| {
             raw.parse::<usize>()
                 .map_err(|_| format!("invalid width {raw:?}"))
@@ -174,7 +216,7 @@ fn resolve_options(
         decimal_flag,
         "GSFMT_DECIMAL",
         "decimal",
-        cfg.as_ref(),
+        &cfg,
         parse_decimal,
         gsfmt::Decimal::default(),
     )?;
@@ -182,7 +224,7 @@ fn resolve_options(
         uppercase_flag,
         "GSFMT_UPPERCASE",
         "uppercase",
-        cfg.as_ref(),
+        &cfg,
         parse_bool,
         false,
     )?;
@@ -243,7 +285,9 @@ fn run() -> Result<ExitCode, String> {
         }
     }
 
-    let opts = resolve_options(width_flag, decimal_flag, uppercase_flag)?;
+    // Project config anchors at the first FILE; stdin anchors at the cwd.
+    let anchor = inputs.iter().flatten().next().map(String::as_str);
+    let opts = resolve_options(anchor, width_flag, decimal_flag, uppercase_flag)?;
     let render = |src: &str| {
         if minify {
             gsfmt::minify(src, &opts)
