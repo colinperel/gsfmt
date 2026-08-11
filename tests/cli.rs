@@ -310,6 +310,54 @@ fn write_mode_formats_files_in_place() {
     assert_eq!(out.code, 1);
 }
 
+/// A directory under `--write` expands to every `.gsfx` file beneath it:
+/// nested files format, other extensions and hidden entries are left
+/// alone. Without `--write` a directory is a usage error, not an opaque
+/// "Is a directory" read failure.
+#[test]
+fn write_mode_expands_directories() {
+    let dir = std::env::temp_dir().join("gsfmt-cli-write-dir-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("nested")).unwrap();
+    std::fs::create_dir_all(dir.join(".hidden")).unwrap();
+    let top = dir.join("top.gsfx");
+    let nested = dir.join("nested/deep.gsfx");
+    let other = dir.join("notes.txt");
+    let hidden = dir.join(".hidden/skip.gsfx");
+    std::fs::write(&top, "=sum( A1,B2 )").unwrap();
+    std::fs::write(&nested, "=sum( C3 )").unwrap();
+    std::fs::write(&other, "=sum( A1 )").unwrap();
+    std::fs::write(&hidden, "=sum( A1 )").unwrap();
+
+    let out = run(&["--write", dir.to_str().unwrap()], &[], "");
+    assert_eq!(out.code, 0, "stderr: {}", out.stderr);
+    assert_eq!(std::fs::read_to_string(&top).unwrap(), "=sum(A1, B2)\n");
+    assert_eq!(std::fs::read_to_string(&nested).unwrap(), "=sum(C3)\n");
+    assert_eq!(std::fs::read_to_string(&other).unwrap(), "=sum( A1 )");
+    assert_eq!(std::fs::read_to_string(&hidden).unwrap(), "=sum( A1 )");
+
+    // without --write a directory is rejected up front
+    let out = run(&[dir.to_str().unwrap()], &[], "");
+    assert_eq!(out.code, 1, "stdout was: {}", out.stdout);
+    assert!(out.stderr.contains("need --write"), "{}", out.stderr);
+
+    // a symlink cycle must not hang the walk (symlinked dirs not followed),
+    // while a symlink to a .gsfx file still formats
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&dir, dir.join("loop")).unwrap();
+        std::fs::write(&top, "=sum( A1,B2 )").unwrap();
+        let link = dir.join("link.gsfx");
+        std::os::unix::fs::symlink(&nested, &link).unwrap();
+        std::fs::write(&nested, "=sum( C3 )").unwrap();
+
+        let out = run(&["--write", dir.to_str().unwrap()], &[], "");
+        assert_eq!(out.code, 0, "stderr: {}", out.stderr);
+        assert_eq!(std::fs::read_to_string(&top).unwrap(), "=sum(A1, B2)\n");
+        assert_eq!(std::fs::read_to_string(&nested).unwrap(), "=sum(C3)\n");
+    }
+}
+
 /// The in-place replacement must not disturb neighbours or metadata: a
 /// pre-existing sidecar file survives (the temp name is created
 /// exclusively, never a fixed predictable path), and the original's

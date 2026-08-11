@@ -14,7 +14,10 @@ USAGE:
 
     Reads stdin when FILE is absent or `-`. Writes to stdout.
     With --write, formats each FILE in place instead (stdin not allowed);
-    several FILEs are only accepted together with --write.
+    several FILEs are only accepted together with --write. A FILE that is
+    a directory needs --write and expands to every `.gsfx` file beneath
+    it, recursively: hidden entries are skipped and symlinked directories
+    are not followed.
 
 OPTIONS:
     -m, --minify        Collapse the formula onto a single line (a newline
@@ -249,30 +252,7 @@ fn run() -> Result<ExitCode, String> {
     };
 
     if write {
-        // In-place mode: every input must be a real file, and errors are
-        // reported per file so one bad formula doesn't block the rest.
-        if inputs.is_empty() {
-            return Err("--write requires at least one FILE".into());
-        }
-        if inputs.iter().any(Option::is_none) {
-            return Err("--write cannot read stdin; pass FILEs".into());
-        }
-        let mut worst = 0u8;
-        for p in inputs.iter().flatten() {
-            if let Err(e) = write_in_place(p, &render) {
-                match e {
-                    WriteError::Io(msg) => {
-                        eprintln!("gsfmt: {msg}");
-                        worst = worst.max(1);
-                    }
-                    WriteError::Parse(e) => {
-                        eprintln!("gsfmt: {p}: {e}");
-                        worst = worst.max(2);
-                    }
-                }
-            }
-        }
-        return Ok(ExitCode::from(worst));
+        return write_files(&inputs, &render);
     }
 
     // Filter mode: exactly one input. Silently formatting only the last of
@@ -281,6 +261,9 @@ fn run() -> Result<ExitCode, String> {
         return Err("several FILEs need --write; without it, pass one".into());
     }
     let src = if let Some(Some(p)) = inputs.first() {
+        if std::fs::metadata(p).is_ok_and(|m| m.is_dir()) {
+            return Err(format!("{p}: is a directory (directories need --write)"));
+        }
         std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?
     } else {
         let mut buf = String::new();
@@ -307,6 +290,73 @@ fn run() -> Result<ExitCode, String> {
 enum WriteError {
     Io(String),
     Parse(gsfmt::Error),
+}
+
+/// In-place mode: every input must be a real file or a directory (which
+/// expands to the `.gsfx` files beneath it), and errors are reported per
+/// file so one bad formula doesn't block the rest.
+fn write_files(
+    inputs: &[Option<String>],
+    render: &impl Fn(&str) -> Result<String, gsfmt::Error>,
+) -> Result<ExitCode, String> {
+    if inputs.is_empty() {
+        return Err("--write requires at least one FILE".into());
+    }
+    if inputs.iter().any(Option::is_none) {
+        return Err("--write cannot read stdin; pass FILEs".into());
+    }
+    let mut files: Vec<String> = Vec::new();
+    for p in inputs.iter().flatten() {
+        if std::fs::metadata(p).is_ok_and(|m| m.is_dir()) {
+            collect_gsfx(std::path::Path::new(p), &mut files)?;
+        } else {
+            files.push(p.clone());
+        }
+    }
+    let mut worst = 0u8;
+    for p in &files {
+        if let Err(e) = write_in_place(p, render) {
+            match e {
+                WriteError::Io(msg) => {
+                    eprintln!("gsfmt: {msg}");
+                    worst = worst.max(1);
+                }
+                WriteError::Parse(e) => {
+                    eprintln!("gsfmt: {p}: {e}");
+                    worst = worst.max(2);
+                }
+            }
+        }
+    }
+    Ok(ExitCode::from(worst))
+}
+
+/// Recursively collect every `.gsfx` file under `dir`, sorted by name so a
+/// run visits files in a deterministic order. Hidden entries are skipped
+/// and symlinked directories are not followed, so a link cycle cannot hang
+/// the walk; a symlink *to* a `.gsfx` file is still formatted.
+fn collect_gsfx(dir: &std::path::Path, out: &mut Vec<String>) -> Result<(), String> {
+    let ctx = |e: std::io::Error| format!("{}: {e}", dir.display());
+    let mut entries = std::fs::read_dir(dir)
+        .map_err(ctx)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(ctx)?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        if file_type.is_dir() {
+            collect_gsfx(&path, out)?;
+        } else if path.extension().is_some_and(|x| x == "gsfx") {
+            out.push(path.to_string_lossy().into_owned());
+        }
+    }
+    Ok(())
 }
 
 /// Format one file in place. Already-clean files are left untouched; a
