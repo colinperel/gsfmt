@@ -727,6 +727,7 @@ fn render_inline(items: &[Node], minify: bool) -> (String, Vec<usize>) {
     let mut out = String::new();
     let mut offs = Vec::with_capacity(items.len());
     let mut prev_operand = false;
+    let mut prev_leaf = false;
     let mut pending_space = false;
 
     for node in items {
@@ -738,6 +739,7 @@ fn render_inline(items: &[Node], minify: bool) -> (String, Vec<usize>) {
                     offs.push(out.len());
                     out.push('%');
                     prev_operand = true;
+                    prev_leaf = false;
                     pending_space = false;
                 } else if is_tight(op) {
                     // A tight `!` glued onto an open error literal would be
@@ -776,12 +778,17 @@ fn render_inline(items: &[Node], minify: bool) -> (String, Vec<usize>) {
                 // `"a" "b"`) keep a separating space in both modes: gluing
                 // them merges tokens on re-lex — `A1B1` is one atom, and
                 // `"a""b"` even re-lexes as a single string with an escaped
-                // quote. Sheets rejects such input (it has no space-
+                // quote. The same goes for a leaf operand followed by a
+                // *headed* group: `A1 SUM(1)` glued becomes the call
+                // `A1SUM(1)`. Sheets rejects such input (it has no space-
                 // intersection operator), so this is preservation of
-                // garbage, not endorsement. Groups stay glued to whatever
-                // precedes them: `LAMBDA(x, x)(1000)` is a real invocation.
+                // garbage, not endorsement. Headless groups stay glued to
+                // whatever precedes them: `LAMBDA(x, x)(1000)` is a real
+                // invocation.
                 let leaf_operand = matches!(node, Node::Leaf(_));
-                if pending_space || (leaf_operand && prev_operand) {
+                let headed_group = matches!(node, Node::Group(g) if g.head.is_some());
+                if pending_space || (prev_operand && (leaf_operand || (prev_leaf && headed_group)))
+                {
                     out.push(' ');
                 }
                 let s = match node {
@@ -794,6 +801,7 @@ fn render_inline(items: &[Node], minify: bool) -> (String, Vec<usize>) {
                 offs.push(out.len());
                 out.push_str(&s);
                 prev_operand = true;
+                prev_leaf = leaf_operand;
                 pending_space = false;
             }
         }

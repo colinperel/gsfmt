@@ -138,9 +138,9 @@ fn config_text() -> Option<(std::path::PathBuf, String)> {
 /// the current directory when reading stdin. Per-project settings (a
 /// comma-locale spreadsheet, a house width) live here and beat the user
 /// config, so a checkout formats the same for everyone.
-fn project_config(anchor: Option<&str>) -> Option<(std::path::PathBuf, String)> {
+fn project_config(anchor: Option<&std::path::Path>) -> Option<(std::path::PathBuf, String)> {
     // Not `std::path::absolute`: that is stable since 1.79, above the MSRV.
-    let start = match anchor.map(std::path::Path::new) {
+    let start = match anchor {
         Some(p) if p.is_absolute() => p.to_path_buf(),
         Some(p) => std::env::current_dir().ok()?.join(p),
         None => std::env::current_dir().ok()?,
@@ -195,7 +195,7 @@ fn resolve<T>(
 /// Resolve every setting through flag → environment → project config →
 /// user config → default.
 fn resolve_options(
-    anchor: Option<&str>,
+    anchor: Option<&std::path::Path>,
     width_flag: Option<usize>,
     decimal_flag: Option<gsfmt::Decimal>,
     uppercase_flag: Option<bool>,
@@ -257,11 +257,19 @@ fn run() -> Result<ExitCode, String> {
     let mut decimal_flag: Option<gsfmt::Decimal> = None;
     let mut uppercase_flag: Option<bool> = None;
     // `None` in the list means stdin (`-`).
-    let mut inputs: Vec<Option<String>> = Vec::new();
-    let mut args = std::env::args().skip(1);
+    let mut inputs: Vec<Option<std::path::PathBuf>> = Vec::new();
+    // `args_os`, not `args`: the latter panics outright on a non-UTF-8
+    // argument, and filenames are exactly where those occur.
+    let mut args = std::env::args_os().skip(1);
 
     while let Some(arg) = args.next() {
-        match arg.as_str() {
+        // Every flag is ASCII, so an argument that is not valid UTF-8 can
+        // only be a filename.
+        let Some(text) = arg.to_str() else {
+            inputs.push(Some(arg.into()));
+            continue;
+        };
+        match text {
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return Ok(ExitCode::SUCCESS);
@@ -274,11 +282,15 @@ fn run() -> Result<ExitCode, String> {
             "-i" | "--write" => write = true,
             "-w" | "--width" => {
                 let v = args.next().ok_or("--width requires a value")?;
+                let v = v.to_str().ok_or_else(|| format!("invalid width {v:?}"))?;
                 width_flag = Some(v.parse().map_err(|_| format!("invalid width {v:?}"))?);
             }
             "-d" | "--decimal" => {
                 let v = args.next().ok_or("--decimal requires a value")?;
-                decimal_flag = Some(parse_decimal(&v)?);
+                let v = v
+                    .to_str()
+                    .ok_or_else(|| format!("invalid decimal {v:?} (expected dot or comma)"))?;
+                decimal_flag = Some(parse_decimal(v)?);
             }
             "-u" | "--uppercase" => uppercase_flag = Some(true),
             // A bare `-` means stdin; anything else starting with `-` is a
@@ -286,12 +298,16 @@ fn run() -> Result<ExitCode, String> {
             other if other != "-" && other.starts_with('-') => {
                 return Err(format!("unknown option {other:?}\n\n{USAGE}"));
             }
-            other => inputs.push((other != "-").then(|| other.to_string())),
+            other => inputs.push((other != "-").then(|| other.into())),
         }
     }
 
     // Project config anchors at the first FILE; stdin anchors at the cwd.
-    let anchor = inputs.iter().flatten().next().map(String::as_str);
+    let anchor = inputs
+        .iter()
+        .flatten()
+        .next()
+        .map(std::path::PathBuf::as_path);
     let opts = resolve_options(anchor, width_flag, decimal_flag, uppercase_flag)?;
     let render = |src: &str| {
         if minify {
@@ -312,9 +328,12 @@ fn run() -> Result<ExitCode, String> {
     }
     let src = if let Some(Some(p)) = inputs.first() {
         if std::fs::metadata(p).is_ok_and(|m| m.is_dir()) {
-            return Err(format!("{p}: is a directory (directories need --write)"));
+            return Err(format!(
+                "{}: is a directory (directories need --write)",
+                p.display()
+            ));
         }
-        std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?
+        std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?
     } else {
         let mut buf = String::new();
         std::io::stdin()
@@ -346,7 +365,7 @@ enum WriteError {
 /// expands to the `.gsfx` files beneath it), and errors are reported per
 /// file so one bad formula doesn't block the rest.
 fn write_files(
-    inputs: &[Option<String>],
+    inputs: &[Option<std::path::PathBuf>],
     render: &impl Fn(&str) -> Result<String, gsfmt::Error>,
 ) -> Result<ExitCode, String> {
     if inputs.is_empty() {
@@ -367,13 +386,13 @@ fn write_files(
             // are reported like any other per-file error: the rest of the
             // tree and every other input still format.
             let mut errors = Vec::new();
-            collect_gsfx(std::path::Path::new(p), &mut files, &mut errors);
+            collect_gsfx(p, &mut files, &mut errors);
             for e in errors {
                 eprintln!("gsfmt: {e}");
                 worst = worst.max(1);
             }
         } else {
-            files.push(p.into());
+            files.push(p.clone());
         }
     }
     for p in &files {

@@ -440,14 +440,22 @@ fn only_whitespace_changes() {
 /// space-intersection operator), so the formatter's job is to preserve the
 /// two tokens, not to fuse them: glued, `A1 B1` re-lexes as one atom and
 /// `"a" "b"` re-lexes as a *single* string with an escaped quote — both are
-/// token changes, not whitespace changes. Groups still glue to what precedes
-/// them, because `LAMBDA(x, x)(1000)` is a real invocation.
+/// token changes, not whitespace changes. The same applies to a leaf operand
+/// followed by a *call*: glued, `A1 SUM(1)` re-lexes as the single call
+/// `A1SUM(1)`. Headless groups still glue to what precedes them, because
+/// `LAMBDA(x, x)(1000)` is a real invocation.
 #[test]
 fn adjacent_operands_never_fuse() {
     assert_eq!(fmt("=A1 B1"), "=A1 B1\n");
     assert_eq!(min("=A1 B1"), "=A1 B1\n");
     assert_eq!(min("=A1   B1"), "=A1 B1\n");
     assert_eq!(min("=\"a\" \"b\""), "=\"a\" \"b\"\n");
+    assert_eq!(fmt("=A1 SUM(1)"), "=A1 SUM(1)\n");
+    assert_eq!(min("=A1 SUM(1)"), "=A1 SUM(1)\n");
+    // The error-literal `#` scan would swallow a glued head on re-lex, and
+    // format and minify must agree on the token stream they emit.
+    assert_eq!(fmt("=#N/A SUM(1)"), "=#N/A SUM(1)\n");
+    assert_eq!(min("=#N/A SUM(1)"), "=#N/A SUM(1)\n");
     assert_eq!(fmt("=LAMBDA(x, x)(1000)"), "=LAMBDA(x, x)(1000)\n");
     assert_eq!(min("=LAMBDA(x, x)(1000)"), "=LAMBDA(x,x)(1000)\n");
 }
