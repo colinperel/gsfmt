@@ -5,7 +5,13 @@ edition = "2021"
 rust-version = "1.74"
 description = "Formatter for Google Sheets formulas (LET/LAMBDA aware)"
 license = "MIT"
-publish = false
+repository = "https://github.com/colinperel/gsfmt"
+readme = "README.md"
+keywords = ["google-sheets", "formatter", "formula", "spreadsheet"]
+categories = ["command-line-utilities", "text-processing"]
+# The remediation plan is a historical artifact and .github is CI plumbing;
+# neither belongs in the published crate.
+exclude = ["/.github", "/PLAN.md"]
 
 [dependencies]
 

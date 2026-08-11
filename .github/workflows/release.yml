@@ -1,0 +1,143 @@
+name: Release
+
+# Cut a release by pushing a `v*` tag. The guard job refuses a tag whose
+# version doesn't match Cargo.toml, so a mistyped tag can't publish a
+# mismatched crate or mislabeled binaries. Requires the CARGO_REGISTRY_TOKEN
+# repository secret (crates.io API token scoped to publish-update).
+#
+# Ordering: the irreversible step (cargo publish — crates.io versions can be
+# yanked but never deleted or reused) runs only after every binary has built
+# green. The GitHub release is created independently of the publish job; if
+# either fails, re-run just the failed job from the Actions UI.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  guard:
+    name: Tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # github.ref_name is writer-controlled, not attacker-controlled, on a
+      # tag push — routed through env anyway so no `${{ }}` reaches the shell.
+      - env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          crate=$(cargo pkgid | sed 's/.*[@#]//')
+          if [ "v$crate" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match crate version $crate"
+            exit 1
+          fi
+
+  test:
+    name: Test
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: cargo test --locked
+
+  binaries:
+    name: Binary (${{ matrix.target }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          # Cross-compiled from the arm64 runner; Apple's toolchain links
+          # both architectures natively, so no separate Intel runner needed.
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup target add "$TARGET"
+      - shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked --target "$TARGET"
+      - name: Package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          name="gsfmt-$TAG-$TARGET"
+          mkdir "$name"
+          cp README.md LICENSE CHANGELOG.md "$name/"
+          case "$TARGET" in
+            *windows*)
+              cp "target/$TARGET/release/gsfmt.exe" "$name/"
+              7z a "$name.zip" "$name"
+              ;;
+            *)
+              cp "target/$TARGET/release/gsfmt" "$name/"
+              tar czf "$name.tar.gz" "$name"
+              ;;
+          esac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gsfmt-${{ matrix.target }}
+          path: |
+            gsfmt-*.tar.gz
+            gsfmt-*.zip
+          if-no-files-found: error
+
+  publish:
+    name: crates.io
+    needs: [test, binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked
+
+  release:
+    name: GitHub release
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create release with CHANGELOG notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        # CHANGELOG.md sections are `## vX.Y.Z — date`; extract this tag's
+        # section as the release body. An empty extraction fails the job —
+        # cutting a release without a changelog entry is a mistake to surface,
+        # not paper over.
+        run: |
+          awk -v tag="$TAG" '
+            $1 == "##" && $2 == tag { grab = 1; next }
+            $1 == "##" && grab { exit }
+            grab { print }
+          ' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::no CHANGELOG.md section for $TAG"
+            exit 1
+          fi
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          gh release create "$TAG" --verify-tag --title "$TAG" \
+            --notes-file notes.md dist/*
