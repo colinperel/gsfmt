@@ -3,7 +3,8 @@ name: Release
 # Cut a release by pushing a `v*` tag. The guard job refuses a tag whose
 # version doesn't match Cargo.toml, so a mistyped tag can't publish a
 # mismatched crate or mislabeled binaries. Requires the CARGO_REGISTRY_TOKEN
-# repository secret (crates.io API token scoped to publish-update).
+# repository secret (crates.io API token with publish-new + publish-update
+# scopes — publish-new is needed until the first publish exists).
 #
 # Ordering: the irreversible step (cargo publish — crates.io versions can be
 # yanked but never deleted or reused) runs only after every binary has built
