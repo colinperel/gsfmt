@@ -2,10 +2,11 @@
 
 Formatter for [Google Sheets](https://sheets.google.com) formulas.
 LET/LAMBDA aware: aligns binding values to the tightest column that
-fits, breaks long calls across lines at a configurable width, and
-collapses back to a single line with `--minify` for pasting into a
-cell (a newline inside a string literal is content, not layout, and
-survives even minify).
+fits — hanging a value on its own line below its key when it is too
+big to sit beside it — breaks long calls across lines at a
+configurable width, and collapses back to a single line with
+`--minify` for pasting into a cell (a newline inside a string literal
+is content, not layout, and survives even minify).
 
 ```sh
 gsfmt formula.gsfx           # format to stdout (stdin when no file)
