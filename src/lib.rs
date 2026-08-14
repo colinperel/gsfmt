@@ -83,9 +83,10 @@ impl Default for Options {
 /// Indent added per nesting level.
 const INDENT: usize = 2;
 
-/// Give up on column-aligning `LET`/`IFS`/`SWITCH` values once the widest
-/// key would push the value column this far right; fall back to a single
-/// space so one long name cannot shove every value off the screen.
+/// Hard ceiling on how far right the widest key may push the shared value
+/// column of a `LET`/`IFS`/`SWITCH`, so one long name cannot shove every
+/// value off the screen. See [`pairs_align`], which also scales the cap to
+/// the window.
 const ALIGN_MAX: usize = 40;
 
 /// Groups nested deeper than this are rejected at parse time. Real formulas
@@ -891,6 +892,16 @@ fn emitted_widest(col: usize, s: &str) -> usize {
     }
 }
 
+/// Column the final emitted line of `s` ends at, placed at `col`. A
+/// separator a caller appends lands there, not on the widest line — for a
+/// fragment carrying a newline inside a string literal the two differ.
+fn emitted_last(col: usize, s: &str) -> usize {
+    match s.rsplit_once('\n') {
+        None => col + cols(s),
+        Some((_, last)) => cols(last),
+    }
+}
+
 /// A block's width bound. `widest` is the widest line the block could need;
 /// `last` is where its final line ends — the column at which a separator
 /// appended by the caller would land. `last <= widest` always holds.
@@ -971,12 +982,9 @@ fn min_group_width(g: &Group, col: usize, width: usize) -> MinWidth {
     while idx < n {
         // This argument's separator, plus every non-final blank argument
         // hanging off its final line (a joining space and a separator each).
-        let mut end_cols = if idx + 1 < n { sep_len(g, idx) } else { 0 };
+        let end_cols = trailing_cols(g, idx);
         let mut j = idx + 1;
         while j < n && g.args[j].is_empty() {
-            if j + 1 < n {
-                end_cols += 1 + sep_len(g, j);
-            }
             j += 1;
         }
         widest = widest.max(min_items_width(&g.args[idx], arg_indent, width).with_sep(end_cols));
@@ -989,6 +997,52 @@ fn min_group_width(g: &Group, col: usize, width: usize) -> MinWidth {
 /// `sep_after` closures in the layout functions.
 fn sep_len(g: &Group, i: usize) -> usize {
     g.seps.get(i).map_or(1, |t| cols(&t.text))
+}
+
+/// Columns that land on argument `i`'s final line once the group is laid
+/// out: its own separator, plus the punctuation of every non-final blank
+/// argument hanging off it, since layout gives a blank argument no line of
+/// its own. Zero for the final argument — the closing bracket takes a new
+/// line, so nothing follows it there.
+///
+/// The bound counts these through `with_sep` and the layout charges them as
+/// `pending`; sharing the arithmetic is what keeps the two agreeing.
+fn trailing_cols(g: &Group, i: usize) -> usize {
+    let n = g.args.len();
+    if i + 1 == n {
+        return 0;
+    }
+    let mut out = sep_len(g, i);
+    let mut j = i + 1;
+    while j < n && g.args[j].is_empty() {
+        if j + 1 < n {
+            out += 1 + sep_len(g, j);
+        }
+        j += 1;
+    }
+    out
+}
+
+/// Whether a pair-laid group's values share one alignment column, keyed off
+/// the widest key.
+///
+/// [`ALIGN_MAX`] alone is a claim about the *window* — "off the screen" —
+/// enforced without reference to one. At the default width its 40 columns
+/// are about half the room; at `--width 30` they exceed the window
+/// entirely, and a 26-column key claimed a 28-column gutter that opened the
+/// value column exactly on the right margin. Nothing can be laid out at a
+/// column the window does not contain, so require the value column to be
+/// inside it. That is the literal reading of the rule, and it fires only
+/// where the fixed cap stops describing anything: a gutter that fits the
+/// window is left alone, however narrow the window, so the shape at 82 —
+/// and at every width where alignment was doing real work — is unchanged.
+///
+/// Both the bound ([`min_pairs_width`]) and the layout ([`layout_pairs`])
+/// route through here, for the same reason they share [`pair_value_col`] —
+/// a bound that disagrees with the layout it is bounding is the bug class
+/// this module keeps relearning.
+fn pairs_align(widest_key: usize, arg_indent: usize, width: usize) -> bool {
+    widest_key + 2 <= ALIGN_MAX && arg_indent + widest_key + 2 < width
 }
 
 /// Where a pair's value block starts: beside its key at `aligned_col`, or
@@ -1014,13 +1068,21 @@ fn sep_len(g: &Group, i: usize) -> usize {
 /// breakable positions, never a recursive width probe. Measuring the value
 /// at both columns to pick the better one doubles the bound's work at
 /// every nesting level, which on a deep `LET` chain is exponential.
-fn pair_value_col(value: &[Node], aligned_col: usize, arg_indent: usize, width: usize) -> usize {
+fn pair_value_col(
+    value: &[Node],
+    aligned_col: usize,
+    arg_indent: usize,
+    width: usize,
+    pending: usize,
+) -> usize {
     let hang = arg_indent + INDENT;
     if hang >= aligned_col || !is_breakable(value) {
         return aligned_col;
     }
+    let inline = render_inline(value, false).0;
     let must_break = contains_authored_grouping(value)
-        || aligned_col + cols(&render_inline(value, false).0) > width;
+        || aligned_col + cols(&inline) > width
+        || emitted_last(aligned_col, &inline) + pending > width;
     if must_break {
         hang
     } else {
@@ -1051,7 +1113,7 @@ fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize, width: usize) -> u
         .map(|p| render_inline(&g.args[key_of(p)], false).0)
         .collect();
     let widest_key = keys.iter().map(|k| cols(k)).max().unwrap_or(0);
-    let aligned = widest_key + 2 <= ALIGN_MAX;
+    let aligned = pairs_align(widest_key, arg_indent, width);
 
     let mut widest = arg_indent;
     for i in 0..lead {
@@ -1070,7 +1132,7 @@ fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize, width: usize) -> u
         } else {
             sep_len(g, vi)
         };
-        let col = pair_value_col(&g.args[vi], aligned_col, arg_indent, width);
+        let col = pair_value_col(&g.args[vi], aligned_col, arg_indent, width, sep);
         // A hanging value leaves its key alone on the line above, carrying
         // only the separator that follows it.
         if col < aligned_col {
@@ -1295,21 +1357,32 @@ fn binary_op_positions(items: &[Node]) -> Vec<usize> {
 ///
 /// `force` suppresses only the inline shortcut at *this* level.
 ///
-/// Known one-column gap, accepted in PR #64 review: the inline fit test
-/// below cannot see a separator the *caller* will append to this block's
-/// last line, so an argument landing exactly at `width` stays inline and
-/// the comma lands one column past it. Fixing it means threading the
-/// pending-separator width into every fit decision; do that if it ever
-/// bites in practice.
+/// `pending` is what the caller will append to this block's final line —
+/// an argument separator, a suffix riding a closing bracket, or both. A
+/// fit test that cannot see it accepts a block ending exactly at `width`
+/// and then the comma lands one column past it, which was a known gap
+/// until the width bound learned to count the same columns (`with_sep`);
+/// the two now measure the same thing. It is charged to the *final* line
+/// specifically, which for a fragment carrying a newline inside a string
+/// literal is not the widest one — hence [`emitted_last`].
 fn layout_items(
     items: &[Node],
     start_col: usize,
     indent: usize,
     width: usize,
     force: bool,
+    pending: usize,
 ) -> Vec<String> {
     let (inline, offs) = render_inline(items, false);
-    if !force && !contains_authored_grouping(items) && start_col + cols(&inline) <= width {
+    // Two measures, deliberately: the span decides whether the fragment is
+    // one line, and only the *final* line carries what the caller appends.
+    // Folding `pending` into the span charges a multi-line string literal's
+    // whole width for a comma that lands after its last byte.
+    if !force
+        && !contains_authored_grouping(items)
+        && start_col + cols(&inline) <= width
+        && emitted_last(start_col, &inline) + pending <= width
+    {
         return vec![inline];
     }
 
@@ -1324,9 +1397,11 @@ fn layout_items(
     // across lines because of that would be gratuitous, and it also strips
     // the very grouping that forced the break.
     let ops = binary_op_positions(items);
-    if emitted_widest(start_col, &inline) > width && !ops.is_empty() {
+    let emitted =
+        emitted_widest(start_col, &inline).max(emitted_last(start_col, &inline) + pending);
+    if emitted > width && !ops.is_empty() {
         let cont = indent + INDENT;
-        let mut lines = layout_items(&items[..ops[0]], start_col, indent, width, false);
+        let mut lines = layout_items(&items[..ops[0]], start_col, indent, width, false, 0);
         for (n, &start) in ops.iter().enumerate() {
             let end = ops.get(n + 1).copied().unwrap_or(items.len());
             let Node::Leaf(op) = &items[start] else {
@@ -1334,7 +1409,9 @@ fn layout_items(
             };
             let operand = &items[start + 1..end];
             let head = format!("{}{} ", ind(cont), op.text);
-            let mut block = layout_items(operand, cols(&head), cols(&head), width, false);
+            let last_operand = n + 1 == ops.len();
+            let carried = if last_operand { pending } else { 0 };
+            let mut block = layout_items(operand, cols(&head), cols(&head), width, false, carried);
             block[0] = format!("{head}{}", block[0]);
             lines.extend(block);
         }
@@ -1381,7 +1458,7 @@ fn layout_items(
     // stay on the indent grid).
     let group_col = start_col + cols(&prefix);
     let body = (indent + cols(&prefix)).min(indent + INDENT);
-    let mut lines = layout_group(g, group_col, body, width, force);
+    let mut lines = layout_group(g, group_col, body, width, force, cols(&suffix) + pending);
     lines[0] = format!("{prefix}{}", lines[0]);
     if !suffix.is_empty() {
         let last = lines.len() - 1;
@@ -1400,9 +1477,14 @@ fn layout_group(
     indent: usize,
     width: usize,
     force: bool,
+    pending: usize,
 ) -> Vec<String> {
     let inline = render_group_inline(g, false);
-    if !force && !group_forces_break(g) && start_col + cols(&inline) <= width {
+    if !force
+        && !group_forces_break(g)
+        && start_col + cols(&inline) <= width
+        && emitted_last(start_col, &inline) + pending <= width
+    {
         return vec![inline];
     }
     if g.is_empty_call() {
@@ -1431,7 +1513,14 @@ fn layout_group(
             if a.is_empty() {
                 vec![String::new()]
             } else {
-                layout_items(a, arg_indent, arg_indent, width, force_arg_break(g, i))
+                layout_items(
+                    a,
+                    arg_indent,
+                    arg_indent,
+                    width,
+                    force_arg_break(g, i),
+                    trailing_cols(g, i),
+                )
             }
         })
         .collect();
@@ -1523,7 +1612,7 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
         .collect();
 
     let widest = keys.iter().map(|k| cols(k)).max().unwrap_or(0);
-    let aligned = widest + 2 <= ALIGN_MAX;
+    let aligned = pairs_align(widest, arg_indent, width);
     let value_col = arg_indent + if aligned { widest + 2 } else { 0 };
 
     // The separator that followed argument `i` in the source. Locales that
@@ -1547,9 +1636,10 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
     };
 
     for i in 0..lead {
-        let mut block = layout_items(&g.args[i], arg_indent, arg_indent, width, false);
+        let sep = sep_after(i);
+        let mut block = layout_items(&g.args[i], arg_indent, arg_indent, width, false, cols(sep));
         block[0] = format!("{}{}", ind(arg_indent), block[0]);
-        emit(&mut lines, block, &g.args[i], sep_after(i));
+        emit(&mut lines, block, &g.args[i], sep);
     }
 
     for p in 0..pair_count {
@@ -1562,9 +1652,11 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
         } else {
             arg_indent + cols(key) + 2
         };
-        let col = pair_value_col(&g.args[vi], aligned_col, arg_indent, width);
+        let last = !has_tail && p + 1 == pair_count;
+        let value_sep = if last { "" } else { sep_after(vi) };
+        let col = pair_value_col(&g.args[vi], aligned_col, arg_indent, width, cols(value_sep));
 
-        let mut block = layout_items(&g.args[vi], col, col, width, false);
+        let mut block = layout_items(&g.args[vi], col, col, width, false, cols(value_sep));
         if col < aligned_col {
             block[0] = format!("{}{}", ind(col), block[0]);
             block.insert(0, format!("{}{key}{key_sep}", ind(arg_indent)));
@@ -1574,18 +1666,12 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
                 .max(1);
             block[0] = format!("{}{key}{key_sep}{}{}", ind(arg_indent), ind(pad), block[0]);
         }
-        let last = !has_tail && p + 1 == pair_count;
-        emit(
-            &mut lines,
-            block,
-            &g.args[ki],
-            if last { "" } else { sep_after(vi) },
-        );
+        emit(&mut lines, block, &g.args[ki], value_sep);
     }
 
     if has_tail {
         let i = n - 1;
-        let mut block = layout_items(&g.args[i], arg_indent, arg_indent, width, false);
+        let mut block = layout_items(&g.args[i], arg_indent, arg_indent, width, false, 0);
         block[0] = format!("{}{}", ind(arg_indent), block[0]);
         emit(&mut lines, block, &g.args[i], "");
     }
@@ -1639,7 +1725,7 @@ pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
         vec![inline]
     } else {
         // Line 0 starts after the `=`, which is a column but not indent.
-        layout_items(&items, lead, 0, width, true)
+        layout_items(&items, lead, 0, width, true, 0)
     };
 
     let mut out = String::new();

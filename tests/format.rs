@@ -1181,6 +1181,115 @@ fn multibyte_let_keys_align_their_values_by_column() {
     assert_eq!(col(l1, '1'), col(l2, '2'), "values misaligned:\n{out}");
 }
 
+/// The alignment cap is a claim about the window ("one long name cannot
+/// shove every value off the screen"), so it has to be enforced against
+/// one. A fixed 40 columns is about half the default width but wider than
+/// a narrow window entirely: at `--width 30` a 26-column key opened the
+/// value column at exactly the right margin, and every short-keyed pair
+/// was padded out to a column with nothing left beyond it. Requiring the
+/// value column to be inside the window drops the gutter there — and only
+/// there. A gutter the window can hold is untouched at any width.
+#[test]
+fn the_alignment_gutter_stays_inside_the_window() {
+    let src =
+        "=LET(futureShoulderBookedNights,aVeryLongValueReferenceHere1234,shortKey,2,shortKey)";
+
+    // Narrow: no room past the gutter, so values sit against their own key.
+    assert_eq!(
+        fmt_w(src, 30).unwrap(),
+        "=LET(\n  futureShoulderBookedNights, aVeryLongValueReferenceHere1234,\n  \
+         shortKey, 2,\n  shortKey\n)\n"
+    );
+
+    // Default: the same gutter fits, so alignment is untouched.
+    assert_eq!(
+        fmt(src),
+        "=LET(\n  futureShoulderBookedNights, aVeryLongValueReferenceHere1234,\n  \
+         shortKey,                   2,\n  shortKey\n)\n"
+    );
+
+    // Dropping the gutter must never widen the result — that is the whole
+    // point of dropping it.
+    for width in 12..=60 {
+        let out = fmt_w(src, width).unwrap();
+        let widest = out.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+        let baseline = fmt(src)
+            .lines()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            widest <= baseline,
+            "narrowing to {width} widened the output to {widest}:\n{out}"
+        );
+    }
+}
+
+/// A block's fit test has to count the separator its *caller* will append
+/// to the block's final line. Without it a block ending exactly at `width`
+/// looked like it fitted, the comma landed one column past, and the width
+/// was quietly exceeded by one — everywhere a separator follows a block,
+/// which is nearly everywhere. The width bound already counted those
+/// columns (`with_sep`), so the layout was the half that had drifted.
+#[test]
+fn a_block_fits_only_if_its_trailing_separator_fits_too() {
+    // The value ends at exactly the width; the pair's comma follows it.
+    let value = "SUM(aaaaaaaaaaaaaaaaaaaaaaaaa, bb)";
+    assert_eq!(
+        fmt_w(&format!("=LET(kk, {value}, zz, 1, kk)"), 40).unwrap(),
+        format!("=LET(\n  kk,\n    {value},\n  zz, 1,\n  kk\n)\n")
+    );
+
+    // Same gap on a plain argument, which takes its separator the same way.
+    assert_eq!(
+        fmt_w(
+            "=IFERROR(SUM(aaaaaaaaaaaaaaaaaaaaaaaaaaaaa, bb), fallbackValue)",
+            40
+        )
+        .unwrap(),
+        "=IFERROR(\n  SUM(\n    aaaaaaaaaaaaaaaaaaaaaaaaaaaaa,\n    bb\n  ),\n  fallbackValue\n)\n"
+    );
+
+    // A newline inside a string literal is content: the fragment already
+    // spans physical lines, and the separator lands after its last byte,
+    // not after its widest one. Charging the separator against the whole
+    // span hung this value below its key over a comma that costs the final
+    // line seven columns.
+    let out = fmt_w("=LET(longkey, \"aaaa\nb\" & c, z, 1, z)", 23).unwrap();
+    assert_eq!(
+        out,
+        "=LET(\n  longkey, \"aaaa\nb\" & c,\n  z,       1,\n  z\n)\n"
+    );
+    for line in out.lines() {
+        assert!(line.chars().count() <= 23, "overflow:\n{out}");
+    }
+
+    // Sweep the edge. The old gap put exactly one line at `width + 1` for
+    // whichever lengths landed a block on the boundary, so walk both. Only
+    // widths that can hold the atom at its deepest indent are fair game —
+    // a token wider than the room left for it overflows on its own merits,
+    // which is the one overshoot the formatter does not promise to avoid.
+    for len in 10..=45 {
+        let arg = "a".repeat(len);
+        for src in [
+            format!("=LET(kk, SUM({arg}, bb), zz, 1, kk)"),
+            format!("=IFERROR(SUM({arg}, bb), fallbackValue)"),
+            format!("=SUM(SUM({arg}, bb), tail)"),
+        ] {
+            for width in (len + 12).max(30)..=60 {
+                let out = fmt_w(&src, width).unwrap();
+                for line in out.lines() {
+                    assert!(
+                        line.chars().count() <= width,
+                        "overflow at len={len} width={width} ({} cols):\n{out}",
+                        line.chars().count()
+                    );
+                }
+            }
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────── locale ──
 
 /// In comma-decimal locales (de/fr/es and friends) `1,5` is the number 1.5
