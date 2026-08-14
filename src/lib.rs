@@ -920,7 +920,12 @@ impl MinWidth {
 /// block, exactly as `layout_group` appends it — measuring the bare argument
 /// reads one column narrow, and at the edge that one omitted comma is the
 /// difference between clamping and overflowing.
-fn min_group_width(g: &Group, col: usize) -> MinWidth {
+///
+/// `width` is not a budget to spend here; it is passed through because one
+/// layout choice — whether a pair's value hangs below its key, see
+/// [`pair_value_col`] — depends on it, and the bound has to model the
+/// layout the formatter will actually emit at *this* width.
+fn min_group_width(g: &Group, col: usize, width: usize) -> MinWidth {
     let head = g.head.as_ref().map_or(0, |h| cols(&h.text)) + cols(&g.open.text);
     let last = col + cols(&g.close.text);
     let widest = (col + head).max(last);
@@ -937,7 +942,7 @@ fn min_group_width(g: &Group, col: usize) -> MinWidth {
         if let Some(lead) = pair_lead(&g.name_upper()) {
             if g.args.len() > lead + 1 {
                 return MinWidth {
-                    widest: widest.max(min_pairs_width(g, lead, arg_indent)),
+                    widest: widest.max(min_pairs_width(g, lead, arg_indent, width)),
                     last,
                 };
             }
@@ -974,7 +979,7 @@ fn min_group_width(g: &Group, col: usize) -> MinWidth {
             }
             j += 1;
         }
-        widest = widest.max(min_items_width(&g.args[idx], arg_indent).with_sep(end_cols));
+        widest = widest.max(min_items_width(&g.args[idx], arg_indent, width).with_sep(end_cols));
         idx = j;
     }
     MinWidth { widest, last }
@@ -986,9 +991,57 @@ fn sep_len(g: &Group, i: usize) -> usize {
     g.seps.get(i).map_or(1, |t| cols(&t.text))
 }
 
+/// Where a pair's value block starts: beside its key at `aligned_col`, or
+/// hanging on its own line one step in from the key.
+///
+/// Alignment is a *first-line* affordance. A value that stays on one line
+/// may sit at the aligned column — that is padding, and padding has no
+/// geometry. A value that has to break has nothing left to align, and
+/// carrying the aligned column into its body would indent by horizontal
+/// position rather than by nesting depth: the skinny right-margin towers
+/// `layout_items` already refuses to emit, and the deeper the value the
+/// narrower they get. Hanging it restores the indent grid, which is what
+/// every modern formatter does with a binding whose value will not fit
+/// beside it.
+///
+/// Two shapes stay beside the key. A value that cannot break — a single
+/// long reference — would still overflow hung, so moving it only spends a
+/// line (the stance `pair_layout_fits` takes on an oversized key). And a
+/// key so short that hanging would not move the value left has nothing to
+/// gain either.
+///
+/// The decision reads only this level: an inline render and a scan for
+/// breakable positions, never a recursive width probe. Measuring the value
+/// at both columns to pick the better one doubles the bound's work at
+/// every nesting level, which on a deep `LET` chain is exponential.
+fn pair_value_col(value: &[Node], aligned_col: usize, arg_indent: usize, width: usize) -> usize {
+    let hang = arg_indent + INDENT;
+    if hang >= aligned_col || !is_breakable(value) {
+        return aligned_col;
+    }
+    let must_break = contains_authored_grouping(value)
+        || aligned_col + cols(&render_inline(value, false).0) > width;
+    if must_break {
+        hang
+    } else {
+        aligned_col
+    }
+}
+
+/// True when a sequence has somewhere to break: a spaced binary operator,
+/// or a group that can open out. Everything else is one unbreakable run,
+/// and no column it is placed at changes how many lines it takes.
+fn is_breakable(items: &[Node]) -> bool {
+    !binary_op_positions(items).is_empty()
+        || items
+            .iter()
+            .any(|n| matches!(n, Node::Group(g) if !g.is_empty_call()))
+}
+
 /// Minimum width of a pair-aligned body, mirroring `layout_pairs`' columns —
-/// including the separator each lead argument and non-final pair carries.
-fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize) -> usize {
+/// including the separator each lead argument and non-final pair carries,
+/// and the key line a hanging value leaves behind.
+fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize, width: usize) -> usize {
     let n = g.args.len();
     let pair_count = (n - lead) / 2;
     let has_tail = (n - lead) % 2 == 1;
@@ -1002,12 +1055,12 @@ fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize) -> usize {
 
     let mut widest = arg_indent;
     for i in 0..lead {
-        widest = widest.max(min_items_width(&g.args[i], arg_indent).with_sep(sep_len(g, i)));
+        widest = widest.max(min_items_width(&g.args[i], arg_indent, width).with_sep(sep_len(g, i)));
     }
     for p in 0..pair_count {
         let ki = key_of(p);
         let vi = ki + 1;
-        let value_col = if aligned {
+        let aligned_col = if aligned {
             arg_indent + widest_key + 2
         } else {
             arg_indent + cols(&keys[p]) + 2
@@ -1017,10 +1070,16 @@ fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize) -> usize {
         } else {
             sep_len(g, vi)
         };
-        widest = widest.max(min_items_width(&g.args[vi], value_col).with_sep(sep));
+        let col = pair_value_col(&g.args[vi], aligned_col, arg_indent, width);
+        // A hanging value leaves its key alone on the line above, carrying
+        // only the separator that follows it.
+        if col < aligned_col {
+            widest = widest.max(arg_indent + cols(&keys[p]) + sep_len(g, ki));
+        }
+        widest = widest.max(min_items_width(&g.args[vi], col, width).with_sep(sep));
     }
     if has_tail {
-        widest = widest.max(min_items_width(&g.args[n - 1], arg_indent).widest);
+        widest = widest.max(min_items_width(&g.args[n - 1], arg_indent, width).widest);
     }
     widest
 }
@@ -1032,10 +1091,10 @@ fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize) -> usize {
 /// as separately placeable underestimates badly: `sheet!$AA:$AA` is five
 /// tokens joined by tight operators that can never be split, and measuring
 /// them individually reported 80 columns for something that needs 88.
-fn min_items_width(items: &[Node], col: usize) -> MinWidth {
+fn min_items_width(items: &[Node], col: usize, width: usize) -> MinWidth {
     let ops = binary_op_positions(items);
     let Some(&first) = ops.first() else {
-        return min_chunk_width(items, col);
+        return min_chunk_width(items, col, width);
     };
 
     // Mirror the chain layout in `layout_items` exactly: the first chunk
@@ -1046,7 +1105,7 @@ fn min_items_width(items: &[Node], col: usize) -> MinWidth {
     // indent — and the bound comes in short, skipping a clamp the emitted
     // line needed.
     let cont = col + INDENT;
-    let mut widest = min_chunk_width(&items[..first], col).widest;
+    let mut widest = min_chunk_width(&items[..first], col, width).widest;
     let mut last = 0;
     for (n, &start) in ops.iter().enumerate() {
         let end = ops.get(n + 1).copied().unwrap_or(items.len());
@@ -1054,7 +1113,7 @@ fn min_items_width(items: &[Node], col: usize) -> MinWidth {
             unreachable!("op position is a leaf")
         };
         let operand_col = cont + cols(&op.text) + 1;
-        let m = min_chunk_width(&items[start + 1..end], operand_col);
+        let m = min_chunk_width(&items[start + 1..end], operand_col, width);
         widest = widest.max(m.widest);
         last = m.last;
     }
@@ -1065,7 +1124,7 @@ fn min_items_width(items: &[Node], col: usize) -> MinWidth {
 /// on one line; only a trailing group can open out, and at best its body is
 /// clamped back to `col + INDENT`. Anything after that group rides on its
 /// closing line, so it widens both the bound and the final-line column.
-fn min_chunk_width(items: &[Node], col: usize) -> MinWidth {
+fn min_chunk_width(items: &[Node], col: usize, width: usize) -> MinWidth {
     let (inline, offs) = render_inline(items, false);
     let Some(gi) = items.iter().rposition(|n| matches!(n, Node::Group(_))) else {
         return MinWidth::flat(col + cols(&inline));
@@ -1079,8 +1138,13 @@ fn min_chunk_width(items: &[Node], col: usize) -> MinWidth {
     let glen = render_group_inline(g, false).len();
     let prefix = cols(&inline[..offs[gi]]);
     let suffix = cols(&inline[offs[gi] + glen..]);
-    // The opening line is unavoidable; the body can at best be clamped.
-    let body = min_group_width(g, col + INDENT);
+    // The opening line is unavoidable; the body can at best be clamped —
+    // to `col + prefix` capped at one indent step, exactly the cap
+    // `layout_items` applies. Measuring the body a full step in from `col`
+    // regardless of the prefix inflates the bound by INDENT at *every*
+    // nesting level, so a deeply nested value reads far wider than the
+    // layout it will actually get.
+    let body = min_group_width(g, col + prefix.min(INDENT), width);
     let last = body.last + suffix;
     MinWidth {
         widest: (col + prefix + head).max(body.widest).max(last),
@@ -1129,12 +1193,12 @@ fn pair_layout_fits(g: &Group, lead: usize, arg_indent: usize, width: usize) -> 
     let keys_inline = (0..pair_count).all(|p| {
         let key = &g.args[lead + p * 2];
         let inline_end = arg_indent + cols(&render_inline(key, false).0);
-        inline_end + 2 <= width || min_items_width(key, arg_indent).widest >= inline_end
+        inline_end + 2 <= width || min_items_width(key, arg_indent, width).widest >= inline_end
     });
     if !keys_inline {
         return false;
     }
-    if min_pairs_width(g, lead, arg_indent) <= width {
+    if min_pairs_width(g, lead, arg_indent, width) <= width {
         return true;
     }
     // Pairs overflow: fall back only if the plain layout genuinely fits.
@@ -1146,7 +1210,7 @@ fn pair_layout_fits(g: &Group, lead: usize, arg_indent: usize, width: usize) -> 
         .filter(|(_, a)| !a.is_empty())
         .map(|(i, a)| {
             let sep = if i + 1 == n { 0 } else { sep_len(g, i) };
-            min_items_width(a, arg_indent).with_sep(sep)
+            min_items_width(a, arg_indent, width).with_sep(sep)
         })
         .max()
         .unwrap_or(arg_indent);
@@ -1444,7 +1508,9 @@ fn layout_group(
 }
 
 /// One (key, value) pair per line, values column-aligned, with any blank
-/// lines the author wrote between logical groups preserved.
+/// lines the author wrote between logical groups preserved. A value too big
+/// to sit beside its key takes the line below instead, one step in — see
+/// [`pair_value_col`].
 fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize) -> Vec<String> {
     let arg_indent = indent + INDENT;
     let n = g.args.len();
@@ -1491,17 +1557,23 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
         let vi = ki + 1;
         let key = &keys[p];
         let key_sep = sep_after(ki);
-        let col = if aligned {
+        let aligned_col = if aligned {
             value_col
         } else {
             arg_indent + cols(key) + 2
         };
-        let pad = col
-            .saturating_sub(arg_indent + cols(key) + cols(key_sep))
-            .max(1);
+        let col = pair_value_col(&g.args[vi], aligned_col, arg_indent, width);
 
         let mut block = layout_items(&g.args[vi], col, col, width, false);
-        block[0] = format!("{}{key}{key_sep}{}{}", ind(arg_indent), ind(pad), block[0]);
+        if col < aligned_col {
+            block[0] = format!("{}{}", ind(col), block[0]);
+            block.insert(0, format!("{}{key}{key_sep}", ind(arg_indent)));
+        } else {
+            let pad = col
+                .saturating_sub(arg_indent + cols(key) + cols(key_sep))
+                .max(1);
+            block[0] = format!("{}{key}{key_sep}{}{}", ind(arg_indent), ind(pad), block[0]);
+        }
         let last = !has_tail && p + 1 == pair_count;
         emit(
             &mut lines,

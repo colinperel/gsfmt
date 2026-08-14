@@ -1086,6 +1086,71 @@ fn the_width_bound_accounts_for_blank_argument_hangs() {
     }
 }
 
+/// `layout_items` clamps a broken group's body to `indent + prefix`, capped
+/// at one indent step — so a group with no prefix keeps its own column and
+/// its arguments sit exactly one step in. The bound has to model that same
+/// cap; measuring the body a full step in from the group's column regardless
+/// of the prefix compounds INDENT at every nesting level, and a deeply
+/// nested value then reads far wider than the layout it will actually get.
+/// A LET whose pairs do fit was being sent to the plain per-argument layout
+/// over that phantom width, tearing every key off its value.
+#[test]
+fn the_width_bound_tracks_the_body_clamp_at_every_level() {
+    // Narrowing the window must cost line breaks, never the pair layout
+    // itself. The phantom width made `pair_layout_fits` believe these
+    // bindings could not be aligned, and the whole LET went to the plain
+    // per-argument layout — every key stranded on a line of its own.
+    let out = fmt_w(include_str!("data/payperiods.gsfx"), 60).unwrap();
+    assert!(
+        out.lines().any(|l| l == "  targetYear, B1,"),
+        "pair alignment abandoned over a phantom width:\n{out}"
+    );
+    for line in out.lines() {
+        assert!(
+            line.len() <= 60 + 1,
+            "overflow ({} cols):\n{out}",
+            line.len()
+        );
+    }
+}
+
+/// Alignment is a first-line affordance: a value that has to break gets its
+/// own line one step in from the key, rather than dragging the whole
+/// subtree out to the aligned column. Anchoring a multi-line value there
+/// indents by horizontal position instead of nesting depth — the skinny
+/// right-margin tower `chain_tail_bodies_take_block_indent_not_bracket_column`
+/// already rules out — and the wider the widest key, the narrower the tower.
+#[test]
+fn a_multiline_pair_value_hangs_below_its_key() {
+    let leaf = "n".repeat(16);
+    assert_eq!(
+        fmt_w(&format!("=LET(kk, AA(BB(CC({leaf}))), kk)"), 30).unwrap(),
+        format!("=LET(\n  kk,\n    AA(\n      BB(CC({leaf}))\n    ),\n  kk\n)\n")
+    );
+
+    // A value that fits beside its key still sits at the aligned column:
+    // padding has no geometry, so there is nothing to gain by moving it.
+    assert_eq!(
+        fmt("=LET(aa,1,bbbb,2,aa+bbbb)"),
+        "=LET(\n  aa,   1,\n  bbbb, 2,\n  aa + bbbb\n)\n"
+    );
+
+    // An unbreakable value overflows wherever it is put, so it stays beside
+    // its key — hanging it would spend a line and fix nothing.
+    let long_ref = "aVeryLongUnbreakableReferenceNameThatCannotFitAnywhere";
+    assert_eq!(
+        fmt_w(&format!("=LET(kk, {long_ref}, kk)"), 30).unwrap(),
+        format!("=LET(\n  kk, {long_ref},\n  kk\n)\n")
+    );
+
+    // A blank line the author wrote between bindings still belongs to the
+    // pair, so it lands above the key rather than between key and value.
+    assert_eq!(
+        fmt_w("=LET(aa,1,\n\nbb,SUM(alpha,beta,gamma,delta,epsilon,zeta),aa)", 30).unwrap(),
+        "=LET(\n  aa, 1,\n\n  bb,\n    SUM(\n      alpha,\n      beta,\n      gamma,\n      delta,\n      epsilon,\n      zeta\n    ),\n  aa\n)\n"
+    );
+}
+
 // ────────────────────────────────────────────────────────────── unicode ──
 
 /// Width is measured in characters, not bytes. A multibyte formula that
@@ -1428,7 +1493,7 @@ fn chain_tail_bodies_take_block_indent_not_bracket_column() {
             50
         )
         .unwrap(),
-        "=LET(\n  above, INDEX($A:H, firstRow, relCol):INDEX(\n             $A:H,\n             prevRow,\n             relCol\n           ),\n  above\n)\n"
+        "=LET(\n  above,\n    INDEX($A:H, firstRow, relCol):INDEX(\n        $A:H,\n        prevRow,\n        relCol\n      ),\n  above\n)\n"
     );
     // short prefixes clamp too — same shape, one rule
     assert_eq!(
