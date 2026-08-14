@@ -83,9 +83,10 @@ impl Default for Options {
 /// Indent added per nesting level.
 const INDENT: usize = 2;
 
-/// Give up on column-aligning `LET`/`IFS`/`SWITCH` values once the widest
-/// key would push the value column this far right; fall back to a single
-/// space so one long name cannot shove every value off the screen.
+/// Hard ceiling on how far right the widest key may push the shared value
+/// column of a `LET`/`IFS`/`SWITCH`, so one long name cannot shove every
+/// value off the screen. See [`pairs_align`], which also scales the cap to
+/// the window.
 const ALIGN_MAX: usize = 40;
 
 /// Groups nested deeper than this are rejected at parse time. Real formulas
@@ -991,6 +992,28 @@ fn sep_len(g: &Group, i: usize) -> usize {
     g.seps.get(i).map_or(1, |t| cols(&t.text))
 }
 
+/// Whether a pair-laid group's values share one alignment column, keyed off
+/// the widest key.
+///
+/// [`ALIGN_MAX`] alone is a claim about the *window* — "off the screen" —
+/// enforced without reference to one. At the default width its 40 columns
+/// are about half the room; at `--width 30` they exceed the window
+/// entirely, and a 26-column key claimed a 28-column gutter that opened the
+/// value column exactly on the right margin. Nothing can be laid out at a
+/// column the window does not contain, so require the value column to be
+/// inside it. That is the literal reading of the rule, and it fires only
+/// where the fixed cap stops describing anything: a gutter that fits the
+/// window is left alone, however narrow the window, so the shape at 82 —
+/// and at every width where alignment was doing real work — is unchanged.
+///
+/// Both the bound ([`min_pairs_width`]) and the layout ([`layout_pairs`])
+/// route through here, for the same reason they share [`pair_value_col`] —
+/// a bound that disagrees with the layout it is bounding is the bug class
+/// this module keeps relearning.
+fn pairs_align(widest_key: usize, arg_indent: usize, width: usize) -> bool {
+    widest_key + 2 <= ALIGN_MAX && arg_indent + widest_key + 2 < width
+}
+
 /// Where a pair's value block starts: beside its key at `aligned_col`, or
 /// hanging on its own line one step in from the key.
 ///
@@ -1051,7 +1074,7 @@ fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize, width: usize) -> u
         .map(|p| render_inline(&g.args[key_of(p)], false).0)
         .collect();
     let widest_key = keys.iter().map(|k| cols(k)).max().unwrap_or(0);
-    let aligned = widest_key + 2 <= ALIGN_MAX;
+    let aligned = pairs_align(widest_key, arg_indent, width);
 
     let mut widest = arg_indent;
     for i in 0..lead {
@@ -1523,7 +1546,7 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
         .collect();
 
     let widest = keys.iter().map(|k| cols(k)).max().unwrap_or(0);
-    let aligned = widest + 2 <= ALIGN_MAX;
+    let aligned = pairs_align(widest, arg_indent, width);
     let value_col = arg_indent + if aligned { widest + 2 } else { 0 };
 
     // The separator that followed argument `i` in the source. Locales that

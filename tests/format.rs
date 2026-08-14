@@ -1181,6 +1181,50 @@ fn multibyte_let_keys_align_their_values_by_column() {
     assert_eq!(col(l1, '1'), col(l2, '2'), "values misaligned:\n{out}");
 }
 
+/// The alignment cap is a claim about the window ("one long name cannot
+/// shove every value off the screen"), so it has to be enforced against
+/// one. A fixed 40 columns is about half the default width but wider than
+/// a narrow window entirely: at `--width 30` a 26-column key opened the
+/// value column at exactly the right margin, and every short-keyed pair
+/// was padded out to a column with nothing left beyond it. Requiring the
+/// value column to be inside the window drops the gutter there — and only
+/// there. A gutter the window can hold is untouched at any width.
+#[test]
+fn the_alignment_gutter_stays_inside_the_window() {
+    let src =
+        "=LET(futureShoulderBookedNights,aVeryLongValueReferenceHere1234,shortKey,2,shortKey)";
+
+    // Narrow: no room past the gutter, so values sit against their own key.
+    assert_eq!(
+        fmt_w(src, 30).unwrap(),
+        "=LET(\n  futureShoulderBookedNights, aVeryLongValueReferenceHere1234,\n  \
+         shortKey, 2,\n  shortKey\n)\n"
+    );
+
+    // Default: the same gutter fits, so alignment is untouched.
+    assert_eq!(
+        fmt(src),
+        "=LET(\n  futureShoulderBookedNights, aVeryLongValueReferenceHere1234,\n  \
+         shortKey,                   2,\n  shortKey\n)\n"
+    );
+
+    // Dropping the gutter must never widen the result — that is the whole
+    // point of dropping it.
+    for width in 12..=60 {
+        let out = fmt_w(src, width).unwrap();
+        let widest = out.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+        let baseline = fmt(src)
+            .lines()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            widest <= baseline,
+            "narrowing to {width} widened the output to {widest}:\n{out}"
+        );
+    }
+}
+
 // ─────────────────────────────────────────────────────────────── locale ──
 
 /// In comma-decimal locales (de/fr/es and friends) `1,5` is the number 1.5
