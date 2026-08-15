@@ -1,6 +1,6 @@
 # Making the width bound a dry run of the renderer
 
-> **Tried 2026-08-15 and abandoned.** The approach below was implemented far
+> **Superseded by `LAYOUT-IR-PLAN.md`.** Tried 2026-08-15 and abandoned. The approach below was implemented far
 > enough to measure and does not work — for two independent reasons, both
 > recorded in "What the attempt found". The problem it addresses is real and
 > still open; this design is not the answer. Read the outcome section before
