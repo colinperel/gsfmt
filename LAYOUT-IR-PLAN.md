@@ -310,10 +310,47 @@ produced those five findings. The difference, and it is still the whole
 point, is that there is exactly *one* `fits` rather than five hand-kept
 copies. The class collapses from five sites to one, not to zero.
 
+### `BestFitting`, tested
+
+The spike was extended to the two cases decision 6 turns on. Two of three
+reproduce; the third does not, and it changes the design.
+
+**`fallback: 0` works.** `LET(veryLongBindingNameHere, 1, ...)` at width 18,
+where neither layout fits and gsfmt keeps pairs: reproduced. Pointing the
+fallback at the last variant instead — Ruff's hardcoded contract — produces
+the torn-apart pair, also reproduced. So the divergence from Ruff in
+decision 6 is demonstrated necessary rather than assumed.
+
+**`AllLines` is necessary but not sufficient**, and the pair/plain choice is
+not a fitting question at all. For
+`SUMIFS(qC, INDIRECT("A" & someLongNamedCell), criterion)` at width 24,
+gsfmt takes the plain layout. The spike reproduces that plain document
+byte-for-byte — but its widest line is 25 columns against a width of 24,
+because `& someLongNamedCell` cannot break any further. So `AllLines`
+rejects plain, `AllLines` rejects pairs, and `fallback: 0` selects pairs.
+gsfmt selects plain.
+
+It selects plain because `pair_layout_fits` asks a different question
+first: is any key *breakable and oversized* — would it get narrower if
+broken? That is a property of one key, not a comparison between two
+layouts, and no ordering, mode or fallback index inside `BestFitting` can
+recover it. This is the same fact that killed the first plan, reappearing
+in a third form.
+
+**The consequence for the design.** The viability of pair layout is decided
+when the document is *built*, not when it is printed:
+
+    if any key is breakable and oversized -> emit the plain document
+    otherwise                             -> emit BestFitting{[pairs, plain], AllLines, fallback: 0}
+
+That check is local — it measures one key, not a subtree — so it is a
+bounded trial of a small document rather than a second model of the whole
+layout. It is the one piece of `layout/bound.rs`'s job that survives, and
+it survives in a form that cannot drift from the renderer, because it
+measures by printing.
+
 ### Still untested
 
-`BestFitting` and the pairs-versus-plain fallback; blank arguments
-(`IF(a,,b)`); comma-locale separators; the packed opening line
-(`SUMIFS(qC,` with leading simple arguments); and performance against the
-depth-99 chain. The fallback case is the one most likely to hold another
-surprise, since it is what broke the previous plan.
+Blank arguments (`IF(a,,b)`); comma-locale separators; the packed opening
+line (`SUMIFS(qC,` with leading simple arguments — the spike hand-built it
+rather than deriving it); and performance against the depth-99 chain.
