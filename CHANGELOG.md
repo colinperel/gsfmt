@@ -5,15 +5,23 @@ entries mirror the [GitHub release notes](https://github.com/colinperel/gsfmt/re
 
 ## v0.8.0 — 2026-08-15
 
-Output-affecting release, and the largest so far: any `.gsfx` file formatted
-by an earlier version will reformat. The changes pull in one direction — a
-`LET`'s bindings keep their alignment where they used to lose it, oversized
-values drop to the line below instead of marching right, and lines stop
-overshooting the width by a column. On a 760-line production formula the
-result went from 442 lines and 29 columns of indent to 415 and 16.
+Output-affecting release, and the largest so far — though only for formulas
+that reach the affected paths. Everything here is about `LET`-style pair
+layout (`LET`, `IFS`, `SWITCH`, the `*IFS` aggregations, `SORT`, `SORTN`,
+`GETPIVOTDATA`, `AVERAGE.WEIGHTED`) once such a group breaks across lines.
+A formula without one, or one that fits on a single line, formats
+byte-identically to v0.7.1 — `=SUM(A1:A9)` is untouched, and so is an
+ordinary `LET` whose values all fit beside their keys.
 
-Reformat in one commit before picking up other work. The diffs are large but
-mechanical, and `--minify` output is unchanged, so no formula's meaning moved.
+Where it does apply, the changes pull in one direction: bindings keep their
+alignment where they used to lose it, oversized values drop to the line below
+instead of marching right, and lines stop overshooting the width by a column.
+On a 760-line production formula the result went from 442 lines and 29
+columns of indent to 415 and 16.
+
+If you have pair-heavy formulas checked in, reformat them in one commit
+before picking up other work. Those diffs are large but mechanical, and
+`--minify` output is unchanged, so no formula's meaning moved.
 
 ### Behavior change
 
@@ -32,6 +40,13 @@ mechanical, and `--minify` output is unchanged, so no formula's meaning moved.
   hanging cannot rescue the pair.
 
 ### Fixes
+
+- **The alignment gutter is sized by the keys that use it.** A key whose
+  value hangs on the line below never occupies the gutter, but it was still
+  setting the width of it, so every other binding in the group paid for
+  padding nobody used — a single long name pushed its neighbours eighteen
+  columns right. Values only ever move left as a result; no line got wider
+  and no overflow count changed.
 
 - **The width bound no longer inflates by one indent step per nesting
   level.** It measured a broken group's body one step deeper than the layout
