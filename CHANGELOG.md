@@ -5,22 +5,28 @@ entries mirror the [GitHub release notes](https://github.com/colinperel/gsfmt/re
 
 ## v0.8.0 — 2026-08-15
 
-Output-affecting release, and the largest so far — though only for formulas
-that reach the affected paths. Everything here is about `LET`-style pair
-layout (`LET`, `IFS`, `SWITCH`, the `*IFS` aggregations, `SORT`, `SORTN`,
-`GETPIVOTDATA`, `AVERAGE.WEIGHTED`) once such a group breaks across lines.
-A formula without one, or one that fits on a single line, formats
-byte-identically to v0.7.1 — `=SUM(A1:A9)` is untouched, and so is an
-ordinary `LET` whose values all fit beside their keys.
+Output-affecting release, and the largest so far. What changes falls into two
+groups, and it is worth knowing which applies to you.
 
-Where it does apply, the changes pull in one direction: bindings keep their
-alignment where they used to lose it, oversized values drop to the line below
-instead of marching right, and lines stop overshooting the width by a column.
-On a 760-line production formula the result went from 442 lines and 29
-columns of indent to 415 and 16.
+Most of it is `LET`-style pair layout — `LET`, `IFS`, `SWITCH`, the `*IFS`
+aggregations, `SORT`, `SORTN`, `GETPIVOTDATA`, `AVERAGE.WEIGHTED` — and only
+once such a group breaks across lines. Bindings keep their alignment where
+they used to lose it, oversized values drop to the line below instead of
+marching right, and the alignment gutter stops being set by keys that do not
+use it. On a 760-line production formula the result went from 442 lines and
+29 columns of indent to 415 and 16.
 
-If you have pair-heavy formulas checked in, reformat them in one commit
-before picking up other work. Those diffs are large but mechanical, and
+One change is general: a block that ended exactly at the width now counts the
+separator its caller appends, so it breaks where it previously overflowed by
+a column. That applies to any argument of any call, not just pair layout —
+`IFERROR(SUM(…), fallback)` reformats at the width where its `SUM` landed on
+the boundary.
+
+So a formula that fits on one line is untouched, and plenty of multi-line
+ones are too — `=SUM(A1:A9)` and an ordinary `LET` whose values all fit
+beside their keys are byte-identical to v0.7.1. But you cannot tell by
+inspection which side of the second group a given formula falls on. Reformat
+in one commit and read the diff: it will be large but mechanical, and
 `--minify` output is unchanged, so no formula's meaning moved.
 
 ### Behavior change
