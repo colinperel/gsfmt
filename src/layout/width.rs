@@ -24,19 +24,19 @@ pub(crate) fn cols(s: &str) -> usize {
 /// Widest physical line of a fragment emitted at column `col`.
 ///
 /// A newline inside a string literal is content, not layout (see
-/// [`format()`]): such a fragment already spans physical lines. Only the
+/// [`crate::format()`]): such a fragment already spans physical lines. Only the
 /// first depends on `col`; the rest restart at column 0 and no layout
-/// decision can narrow them. Measuring the fragment with [`cols`] instead
+/// decision can narrow them. Measuring the fragment with [`crate::layout::width::cols`] instead
 /// counts the whole span as one line, and an operator chain around a
 /// multi-line string was being split at its operators even though every
 /// physical line fit — a break that shortens nothing.
 ///
 /// Backs [`emitted_span`], and through it every fit decision in pair
-/// layout and the prefix/suffix columns in [`min_chunk_width`] and
-/// [`layout_items`].
+/// layout and the prefix/suffix columns in [`crate::layout::bound::min_chunk_width`] and
+/// [`crate::layout::core::layout_items`].
 ///
 /// What deliberately does *not* use it: the inline shortcuts in
-/// [`layout_items`], [`layout_group`] and [`format`], which keep the
+/// [`crate::layout::core::layout_items`], [`crate::layout::core::layout_group`] and [`crate::format`], which keep the
 /// full-span measure. Those ask whether a fragment is a single line at
 /// all, not whether it fits — a formula carrying a newline inside a string
 /// literal is not one line, and collapsing the structure around such a

@@ -164,7 +164,7 @@ pub(crate) fn first_token(items: &[Node]) -> Option<&Token> {
 /// that. This is the one sanctioned exception to "token bytes are copied
 /// verbatim". Array row separators are semantic — `{1;2}` is a column,
 /// `{1,2}` a row — so array groups keep theirs, and under
-/// [`Decimal::Comma`] nothing is touched because `;` is the only argument
+/// [`crate::Decimal::Comma`] nothing is touched because `;` is the only argument
 /// separator there.
 pub(crate) fn normalize_separators(items: &mut [Node]) {
     for node in items {
@@ -186,7 +186,7 @@ pub(crate) fn normalize_separators(items: &mut [Node]) {
 /// Rewrite call heads to their uppercase form, mirroring what the Sheets
 /// editor does to builtin function names the moment a formula is entered.
 /// The second sanctioned exception to "token bytes are copied verbatim",
-/// and opt-in ([`Options::uppercase_functions`]).
+/// and opt-in ([`crate::Options::uppercase_functions`]).
 ///
 /// Bound-name matching uses Unicode case *folding* (see [`fold_name`]),
 /// not ASCII or plain uppercase conversion: Sheets names are
@@ -230,7 +230,7 @@ pub(crate) fn uppercase_function_heads(items: &mut [Node]) {
 /// the known conversion/folding divergences identically (`ẞ`/`ß` → `ss`,
 /// Kelvin → `k`, final sigma → `σ`, Cherokee). Still an approximation of
 /// UCD full case folding — exact folding needs the Unicode tables this
-/// dependency-free crate deliberately avoids (same stance as [`cols`]) —
+/// dependency-free crate deliberately avoids (same stance as [`crate::layout::width::cols`]) —
 /// but both sides of every comparison go through this same key, so any
 /// residual divergence is at least consistent.
 pub(crate) fn fold_name(s: &str) -> String {

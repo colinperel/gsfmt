@@ -46,7 +46,7 @@ pub(crate) fn is_ident_body(c: char) -> bool {
 ///
 /// Returns an error for an unterminated string or quoted sheet name, a
 /// character that cannot start any token, or a `,` used as an argument
-/// separator under [`Decimal::Comma`].
+/// separator under [`crate::Decimal::Comma`].
 // One dispatch chain over the token kinds; splitting it into per-kind
 // helpers would scatter the shared cursor and read worse.
 #[allow(clippy::too_many_lines)]

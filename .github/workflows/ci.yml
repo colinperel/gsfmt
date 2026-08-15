@@ -37,8 +37,12 @@ jobs:
       - run: rustup toolchain install 1.74 --profile minimal
       - run: cargo +1.74 test --locked
 
-  # Public API docs must build clean: strict mode catches broken and
-  # ambiguous intra-doc links that a plain `cargo doc` waves through.
+  # Docs must build clean: strict mode catches broken and ambiguous intra-doc
+  # links that a plain `cargo doc` waves through. `--document-private-items`
+  # is what makes that cover the whole crate — most of this formatter's
+  # explanation lives on private items, and links between them only break
+  # when code moves between modules, which is exactly when nobody is looking
+  # at the docs.
   doc:
     name: Rustdoc (strict)
     runs-on: ubuntu-latest
@@ -46,7 +50,7 @@ jobs:
       RUSTDOCFLAGS: -D warnings
     steps:
       - uses: actions/checkout@v6
-      - run: cargo doc --no-deps --locked
+      - run: cargo doc --no-deps --locked --document-private-items
 
   # tests/data/ goldens are canonical; tree-sitter-gsformula mirrors six of
   # them as examples/. Fail loudly when the copies drift. The checkout is

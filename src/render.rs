@@ -55,7 +55,7 @@ pub(crate) fn strip_bom(src: &str) -> &str {
 
 /// Render a sequence on one line, also reporting where each item starts.
 /// The reported offsets are *byte* offsets into the returned string — meant
-/// for slicing; measure the slices with [`cols`] for column arithmetic.
+/// for slicing; measure the slices with [`crate::layout::width::cols`] for column arithmetic.
 pub(crate) fn render_inline(items: &[Node], minify: bool) -> (String, Vec<usize>) {
     let mut out = String::new();
     let mut offs = Vec::with_capacity(items.len());

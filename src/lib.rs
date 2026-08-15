@@ -83,7 +83,7 @@ pub(crate) const INDENT: usize = 2;
 
 /// Hard ceiling on how far right the widest key may push the shared value
 /// column of a `LET`/`IFS`/`SWITCH`, so one long name cannot shove every
-/// value off the screen. See [`pairs_align`], which also scales the cap to
+/// value off the screen. See [`crate::layout::pairs::pairs_align`], which also scales the cap to
 /// the window.
 pub(crate) const ALIGN_MAX: usize = 40;
 
@@ -125,7 +125,7 @@ fn split_leading_eq(toks: &[Token]) -> (bool, &[Token]) {
 /// Only whitespace between tokens changes; token text is copied verbatim,
 /// with two sanctioned exceptions — in the dot locale, `;` argument
 /// separators normalize to `,` (see `normalize_separators`), and under
-/// [`Options::uppercase_functions`] call heads are uppercased (see
+/// [`crate::Options::uppercase_functions`] call heads are uppercased (see
 /// `uppercase_function_heads`). A newline inside a string literal is
 /// content and survives untouched. A leading UTF-8 BOM is a file-encoding
 /// artifact, not a token, and is dropped.
@@ -183,8 +183,8 @@ pub fn format(src: &str, opts: &Options) -> Result<String, Error> {
 /// preserved — such a formula minifies to more than one physical line.
 /// Dot-locale `;` argument separators normalize to `,` here too, a
 /// leading UTF-8 BOM is dropped here too, and
-/// [`Options::uppercase_functions`] applies here too, so `minify` and
-/// [`format()`] always agree on token text.
+/// [`crate::Options::uppercase_functions`] applies here too, so `minify` and
+/// [`crate::format()`] always agree on token text.
 ///
 /// # Errors
 ///
