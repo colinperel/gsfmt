@@ -3,6 +3,79 @@
 All notable changes to gsfmt. Versions follow [SemVer](https://semver.org);
 entries mirror the [GitHub release notes](https://github.com/colinperel/gsfmt/releases).
 
+## v0.8.0 — 2026-08-15
+
+Output-affecting release, and the largest so far: any `.gsfx` file formatted
+by an earlier version will reformat. The changes pull in one direction — a
+`LET`'s bindings keep their alignment where they used to lose it, oversized
+values drop to the line below instead of marching right, and lines stop
+overshooting the width by a column. On a 760-line production formula the
+result went from 442 lines and 29 columns of indent to 415 and 16.
+
+Reformat in one commit before picking up other work. The diffs are large but
+mechanical, and `--minify` output is unchanged, so no formula's meaning moved.
+
+### Behavior change
+
+- **A `LET` value too big to sit beside its key hangs below it** — one indent
+  step in, instead of anchoring its whole subtree to the aligned key column.
+  Anchoring there indented by horizontal position rather than nesting depth,
+  so the wider the widest key the narrower the tower: a 26-column key pushed
+  nested values out to column 61. This is the break-after-assignment shape
+  every modern formatter uses, and what the reporting formula's author had
+  been writing by hand.
+
+- **A pair that does not fit side by side keeps pair layout** rather than
+  falling back to the plain per-argument list. That fallback existed because
+  pair layout used to pin a key and its value to one line, so falling back
+  was the only way to fit; hanging retired the premise. It still fires where
+  hanging cannot rescue the pair.
+
+### Fixes
+
+- **The width bound no longer inflates by one indent step per nesting
+  level.** It measured a broken group's body one step deeper than the layout
+  emits it, compounding with depth. Three values in a 68-binding `LET`
+  measured 83 columns against a width of 82, all of it phantom, and the whole
+  group lost its alignment — every key stranded on a line of its own. This is
+  the defect that prompted the release.
+
+- **The alignment gutter must fit the window.** The cap on how far right the
+  widest key may push the value column was a fixed 40 regardless of
+  `--width`, so at narrow widths a long key opened the value column on the
+  right margin with nothing beyond it.
+
+- **A block's fit test counts the separator its caller appends.** A block
+  ending exactly at the width passed the test and the comma landed one column
+  past it — wherever a separator follows a block, which is nearly everywhere.
+
+- **An unbreakable value hangs when that is what makes it fit.** Hanging was
+  gated on whether the value could break internally, so a bare `0.55` under a
+  long key stayed put and overflowed although the line below fit it easily.
+
+- **A value holding a group is no longer assumed to expand.** A group is
+  returned whole whenever it fits at the column its prefix leaves it at, and
+  always for an empty call like `NOW()`, so values the layout would have kept
+  beside their key were hung for nothing.
+
+- **Tokens carrying a newline are measured by their physical lines** in every
+  fit decision, not by the total span of the literal. A `QUERY` string
+  spanning four lines was measured as one very long one.
+
+### Internal
+
+- `src/lib.rs` split into modules — `token`, `parse`, `render`, `error`, and
+  a `layout` directory. CI's rustdoc job now documents private items, where
+  nearly all of this crate's explanation lives.
+
+- A production-scale golden, `tests/data/segments.gsfx`: 68 bindings, a
+  26-column widest key, 39 values that hang. Anonymised from the formula that
+  reported these defects, with a test asserting the shape it exists to stress.
+
+- `BOUND-REFACTOR-PLAN.md` and `LAYOUT-IR-PLAN.md` record an attempt to remove
+  the duplicate width model that failed under measurement, and the design that
+  replaces it. Neither ships in the published crate.
+
 ## v0.7.1 — 2026-08-11
 
 Distribution release: gsfmt is now on [crates.io](https://crates.io/crates/gsfmt)
