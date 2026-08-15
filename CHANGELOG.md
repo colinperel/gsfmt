@@ -27,9 +27,11 @@ production formula: 442 lines and 29 columns of indent became 415 and 16.
 **Do not try to predict which formulas change.** The examples above are
 illustrative, not a complete list — this note was written three times, each
 version claiming a scope that a comparison against v0.7.1 then disproved.
-What holds: a formula that fits on one line is untouched, `--minify` output
-is unchanged, so no formula's meaning moved, and nothing got wider. Reformat
-in one commit and read the diff.
+What holds: a formula that fits on one line is untouched, and `--minify`
+output is unchanged, so no formula's meaning moved. Lines can get *wider* as
+well as narrower — a value that moves to the line below gains an indent step,
+so a pair that stops fitting side by side can end two columns further right
+than it did. Reformat in one commit and read the diff.
 
 ### Behavior change
 
