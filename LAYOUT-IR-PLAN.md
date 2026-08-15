@@ -17,10 +17,15 @@ the reference implementation named below.
 
 ## The problem, stated properly
 
-`src/lib.rs` decides layout twice. The `min_*` family predicts what the
-`layout_*` family will emit, and the two are kept in step by hand. Across
-PRs #19, #20 and #21 that failed twelve times — every finding was the
-prediction disagreeing with the emission.
+gsfmt decides layout twice. `layout/bound.rs` predicts what `layout/core.rs`
+and `layout/pairs.rs` will emit, and the two are kept in step by hand.
+Across PRs #19, #20 and #21 that failed twelve times — every finding was
+the prediction disagreeing with the emission.
+
+(Those three modules were one 1948-line `src/lib.rs` until #23 split it.
+The split is what gives this rewrite somewhere to land: a new `src/ir/`
+beside `src/layout/`, and a step that deletes a directory rather than
+rewrites a file in place.)
 
 The first attempt at a fix assumed the answer was to delete the predictor and
 lay both candidates out instead. That does not work: laying a candidate out
@@ -73,7 +78,7 @@ place here.
 
 | gsfmt today | becomes |
 |---|---|
-| `min_group_width`, `min_items_width`, `min_chunk_width`, `min_pairs_width`, `MinWidth` — 206 lines | deleted; `fits` walks the print stream |
+| all of `layout/bound.rs` — 206 lines | deleted; `fits` walks the print stream |
 | `pair_layout_fits` strategy choice | `BestFitting{[pairs, plain], AllLines, fallback: 0}` |
 | `pairs_align`, `PairKeys`, the gutter | `IfFlat(spaces(pad))`, the pad computed once before building the IR |
 | `pair_value_col` / `stays_inline` | a `Group` around the value; it breaks or it does not |
@@ -210,7 +215,7 @@ rewrite of *how* the layout is decided, not of what it produces.
    (two variants would yield plain where the rule keeps pairs) — then
    `monthly.gsfx` and `payperiods.gsfx` byte-identical. (Locally, also the
    760-line formula at width 82; see the note at the top.)
-4. Delete the `min_*` family and the old `layout_*` family. Re-point the
+4. Delete `src/layout/` entirely. Re-point the
    `the_width_bound_*` tests at emitted geometry; any that only made sense
    against the deleted bound should be said so, not deleted quietly.
 5. Width matrix 20–120 over `tests/data/`, and over the 760-line formula if
@@ -262,7 +267,7 @@ Steps 1–2 are additive and safe. Step 3 is where output can move.
 
 A standalone printer — elements, a `fits` with bounded lookahead, and the
 document built by hand — was written and run against real gsfmt output before
-touching `src/lib.rs`. Roughly 130 lines for the printer.
+touching `src/layout/`. Roughly 130 lines for the printer.
 
 **Reproduced byte-for-byte:**
 
