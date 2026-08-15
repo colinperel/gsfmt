@@ -5,29 +5,31 @@ entries mirror the [GitHub release notes](https://github.com/colinperel/gsfmt/re
 
 ## v0.8.0 — 2026-08-15
 
-Output-affecting release, and the largest so far. What changes falls into two
-groups, and it is worth knowing which applies to you.
+Output-affecting release, and the largest so far.
 
-Most of it is `LET`-style pair layout — `LET`, `IFS`, `SWITCH`, the `*IFS`
-aggregations, `SORT`, `SORTN`, `GETPIVOTDATA`, `AVERAGE.WEIGHTED` — and only
-once such a group breaks across lines. Bindings keep their alignment where
-they used to lose it, oversized values drop to the line below instead of
-marching right, and the alignment gutter stops being set by keys that do not
-use it. On a 760-line production formula the result went from 442 lines and
-29 columns of indent to 415 and 16.
+Two kinds of change. The formatter's **width model** — how it measures what
+it is about to emit — was wrong in several independent ways, and those fixes
+are general: they apply to any formula holding a construct that was
+mismeasured, in any builtin. A block ending exactly at the width now counts
+the separator its caller appends; a token carrying a newline is measured by
+the lines it actually occupies rather than the span of the literal; a
+group's body is measured at the column it is emitted at rather than one
+indent step deeper. `IFERROR(SUM(…), fallback)` and
+`IF(cond, "…\n…" & SUM(…), y)` both reformat, with no `LET` in sight.
 
-One change is general: a block that ended exactly at the width now counts the
-separator its caller appends, so it breaks where it previously overflowed by
-a column. That applies to any argument of any call, not just pair layout —
-`IFERROR(SUM(…), fallback)` reformats at the width where its `SUM` landed on
-the boundary.
+The **visible bulk** is pair layout — `LET`, `IFS`, `SWITCH`, the `*IFS`
+aggregations, `SORT`, `SORTN`, `GETPIVOTDATA`, `AVERAGE.WEIGHTED` — once such
+a group breaks across lines. Bindings keep their alignment where they used to
+lose it, oversized values drop to the line below instead of marching right,
+and the gutter stops being set by keys that do not use it. On a 760-line
+production formula: 442 lines and 29 columns of indent became 415 and 16.
 
-So a formula that fits on one line is untouched, and plenty of multi-line
-ones are too — `=SUM(A1:A9)` and an ordinary `LET` whose values all fit
-beside their keys are byte-identical to v0.7.1. But you cannot tell by
-inspection which side of the second group a given formula falls on. Reformat
-in one commit and read the diff: it will be large but mechanical, and
-`--minify` output is unchanged, so no formula's meaning moved.
+**Do not try to predict which formulas change.** The examples above are
+illustrative, not a complete list — this note was written three times, each
+version claiming a scope that a comparison against v0.7.1 then disproved.
+What holds: a formula that fits on one line is untouched, `--minify` output
+is unchanged, so no formula's meaning moved, and nothing got wider. Reformat
+in one commit and read the diff.
 
 ### Behavior change
 
