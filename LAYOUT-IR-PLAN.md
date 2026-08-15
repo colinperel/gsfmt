@@ -137,7 +137,13 @@ These are real choices, not implementation detail. Settle them before step 3.
    `Decimal::Comma`. Separators are `Token`s owned by the builder, so the
    builder has to read the locale rather than hard-code `,`.
 
-6. **`BestFitting` needs three variants, not two, and `AllLines`.**
+5. **The multiline rule.** Ruff never measures a token carrying a newline;
+   `will_break` is set and the enclosing group expands. That does *not*
+   reproduce gsfmt's output — see the spike below. Decide deliberately:
+   adopt Ruff's rule and accept the style change, or keep physical-line
+   measurement, which is implementable in `fits` alone.
+
+6. **`BestFitting` needs an explicit fallback and `AllLines`.**
 
    Ruff prints the *last* variant unconditionally, without measuring it —
    `// No variant fits, take the last (most expanded) as fallback`. So
@@ -183,12 +189,6 @@ These are real choices, not implementation detail. Settle them before step 3.
    variant must place that break inside an expanded group or `AllLines`
    will reject the variant outright. Prove this with a test before relying
    on it.
-
-5. **The multiline rule.** Ruff never measures a token carrying a newline;
-   `will_break` is set and the enclosing group expands. That does *not*
-   reproduce gsfmt's output — see the spike below. Decide deliberately:
-   adopt Ruff's rule and accept the style change, or keep physical-line
-   measurement, which is implementable in `fits` alone.
 
 ## Migration
 
