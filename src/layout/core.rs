@@ -225,7 +225,15 @@ pub(crate) fn layout_items(
     // pushed us is measured from there, not from the prefix's whole span.
     let group_col = emitted_last(start_col, &prefix);
     let body = (indent + group_col.saturating_sub(start_col)).min(indent + INDENT);
-    let mut lines = layout_group(g, group_col, body, width, force, cols(&suffix) + pending);
+    // Only the suffix's first line rides the group's closing line; anything
+    // past its first newline starts a line of its own, whose width does not
+    // depend on where the group began. And if the suffix breaks, whatever the
+    // *caller* appends lands on the suffix's last line, not on the group.
+    let group_pending = match suffix.split_once('\n') {
+        None => cols(&suffix) + pending,
+        Some((head, _)) => cols(head),
+    };
+    let mut lines = layout_group(g, group_col, body, width, force, group_pending);
     lines[0] = format!("{prefix}{}", lines[0]);
     if !suffix.is_empty() {
         let last = lines.len() - 1;
