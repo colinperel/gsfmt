@@ -4,6 +4,7 @@
 use crate::layout::bound::{min_items_width, min_pairs_width};
 use crate::layout::core::{
     binary_op_positions, contains_authored_grouping, group_stays_whole, layout_items, sep_len,
+    suffix_charge,
 };
 use crate::layout::width::{cols, emitted_last, emitted_span, emitted_widest, ind};
 use crate::parse::{first_token, Group, Node};
@@ -298,8 +299,8 @@ pub(crate) fn will_expand(items: &[Node], col: usize, width: usize, pending: usi
     // The group opens where the prefix's final line ends, and whatever
     // follows rides its closing line — the columns `layout_items` uses.
     let group_col = emitted_last(col, &inline[..offs[gi]]);
-    let suffix = cols(&inline[offs[gi] + glen..]);
-    !group_stays_whole(g, group_col, width, false, suffix + pending)
+    let suffix = &inline[offs[gi] + glen..];
+    !group_stays_whole(g, group_col, width, false, suffix_charge(suffix, pending))
 }
 
 /// `LET`/`IFS`/`SWITCH` bind (key, value) pairs that read best one pair per

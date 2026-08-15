@@ -315,6 +315,34 @@ fn only_a_suffixs_first_line_rides_the_group_it_follows() {
     }
 }
 
+/// The pair-layout predictor is charged the same suffix as the renderer.
+///
+/// `will_expand` asks whether `layout_items` will open a value's trailing
+/// group. Both sides have to measure what follows that group the same way,
+/// and when only the renderer was taught to charge just the suffix's first
+/// line, the predictor kept charging the whole span — so it predicted an
+/// expansion that would not happen and hung a value that fits beside its
+/// key.
+#[test]
+fn the_predictor_and_the_renderer_charge_the_same_suffix() {
+    let tail = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let out = fmt(&format!(
+        "=LET(summary, TEXT(cutoff, \"yyyy-mm-dd\") & \"x\n{tail}\", summary)"
+    ));
+    assert_eq!(
+        out,
+        format!("=LET(\n  summary, TEXT(cutoff, \"yyyy-mm-dd\") & \"x\n{tail}\",\n  summary\n)\n"),
+        "the value fits beside its key on every physical line"
+    );
+    for line in out.lines() {
+        assert!(
+            line.chars().count() <= WIDTH,
+            "overflow ({} cols): {line}",
+            line.chars().count()
+        );
+    }
+}
+
 // ───────────────────────────────────────────────────────────── property ──
 
 #[test]
