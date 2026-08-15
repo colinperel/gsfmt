@@ -73,24 +73,21 @@ place here.
 | `has_authored_grouping`, `group_forces_break` | `Line(Empty)` + `ExpandParent` |
 | `trailing_cols` / `pending` threading | the separator is an element in the stream; measured where it sits |
 | `force` flag | flat-mode measurement (`must_be_flat`) |
-| `emitted_widest`, `emitted_last`, `emitted_span` | gone — see below |
+| `emitted_widest`, `emitted_last`, `emitted_span` | one copy, inside `fits` — see the spike |
 
-## What this makes unwriteable
+## What this removes
 
-Not "fixes" — unwriteable, which is the point.
+**Five of the twelve findings** were one error: measuring a token whose text
+carries a newline as though it were a single line. Ruff never measures such a
+token — `TextWidth` is `Width(n)` or `Multiline`, `will_break()` is true for
+`Multiline`, the group expands, the check is skipped — so under Ruff's rule
+the error is unwriteable.
 
-**Five of the twelve findings** were the same error: measuring a token whose
-text carries a newline as though it were one continuous line. Ruff does not
-measure such tokens at all. `TextWidth` is computed once per text element as
-either `Width(n)` or `Multiline`; `will_break()` returns true for
-`Multiline`, the enclosing group expands, and the width check is skipped
-entirely. There is no span-versus-physical question because nothing ever
-measures a multiline token.
-
-This also vindicates the one finding rejected during #21's review — keeping
-the span check so a formula built around a multi-line `QUERY` string stays
-structured. Ruff's rule is the same and stronger: a token containing a
-newline forces its group to break, full stop.
+The spike showed that rule changes gsfmt's output, so it is a decision rather
+than a free win (see "Decisions this forces", item 5, and the spike section).
+If gsfmt keeps its current behaviour, the arithmetic stays but lives in one
+`fits` instead of five hand-kept copies. Five sites become one either way;
+whether it becomes none is the style question.
 
 **The `pending` threading from #20** disappears. A separator is an element
 between two others, so whatever measures the block measures the separator;
@@ -141,7 +138,7 @@ rewrite of *how* the layout is decided, not of what it produces.
 2. Build the IR for the shapes with no pair layout — calls, arrays, operator
    chains, blank arguments. Print through the new printer behind a flag.
    Gate: `gnarly.gsfx` byte-identical.
-3. Pair layout as `BestFitting{[pairs, plain]}` plus `Align`. Gate:
+3. Pair layout as `BestFitting{[pairs, plain]}` plus the `IfFlat` gutter. Gate:
    `monthly.gsfx` and `payperiods.gsfx` byte-identical, and the reporter's
    760-line formula unchanged at width 82.
 4. Delete the `min_*` family and the old `layout_*` family. Re-point the
