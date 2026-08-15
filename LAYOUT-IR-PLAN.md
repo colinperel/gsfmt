@@ -186,13 +186,27 @@ These are real choices, not implementation detail. Settle them before step 3.
    Either way, gate IR *construction* against the depth-99 shape, not just
    printing: this is a cost that lands before any measurement.
 
-   On the mode: Ruff defaults to `BestFittingMode::FirstLine`,
-   where a variant is chosen if the content up to its *first* line break
-   fits. That is wrong for gsfmt and would silently disable the fallback:
-   the pairs variant opens with `LET(` or `SUMIFS(`, which always fits, so
-   `FirstLine` selects pairs before an oversized key or value is ever
-   measured — and `pair_layout_yields_to_breakable_oversized_keys` would
-   fail. gsfmt needs `AllLines`.
+   On the mode: Ruff defaults to `BestFittingMode::FirstLine`, where a
+   variant is chosen if the content up to its *first* line break fits. The
+   pairs variant opens with `LET(` or `SUMIFS(`, which always fits, so
+   `FirstLine` would select pairs without ever looking at the lines that
+   overflow. gsfmt needs `AllLines`.
+
+   The gate for this is the second case of
+   `a_pair_that_overflows_side_by_side_hangs_rather_than_yielding`:
+   `SUMIFS(qC, someRange, criterionThatFitsAlone)` at width 24. It is the
+   shape that separates the two modes — every key is a plain name, so the
+   build-time check does not disqualify pairs and both variants are
+   genuinely in play; the pairs opening line is seven columns, so
+   `FirstLine` accepts it; the pair line beneath is thirty-five, so
+   `AllLines` rejects it; and plain's widest line is exactly twenty-four,
+   so plain wins. gsfmt emits plain here today.
+
+   Note what this is *not*: the `SUMIFS(qC, INDIRECT(…), criterion)` case
+   from the same test cannot gate the mode, because the build-time key
+   check short-circuits it before `BestFitting` is reached. An earlier
+   revision of this document named it, which would have left `AllLines`
+   with no regression coverage at all.
 
    `AllLines` carries its own catch worth designing around: a variant does
    not fit if it contains a hard line break *outside* a group in expanded
@@ -322,14 +336,16 @@ copies. The class collapses from five sites to one, not to zero.
 
 ### `BestFitting`, tested
 
-The spike was extended to the two cases decision 6 turns on. Two of three
-reproduce; the third does not, and it changes the design.
+The spike was extended with three cases: the mode, the fallback, and what
+Ruff's hardcoded fallback would do instead. Two reproduce gsfmt's output.
+The third does not, and it changes the design.
 
-**`fallback: 0` works.** `LET(veryLongBindingNameHere, 1, ...)` at width 18,
-where neither layout fits and gsfmt keeps pairs: reproduced. Pointing the
-fallback at the last variant instead — Ruff's hardcoded contract — produces
-the torn-apart pair, also reproduced. So the divergence from Ruff in
-decision 6 is demonstrated necessary rather than assumed.
+**`fallback: 0` works.** `LET(veryLongBindingNameHere, 1, ...)` at width 18
+is the case where neither layout fits and gsfmt keeps pairs; the spike
+reproduces it. Repointing the fallback at the last variant — Ruff's
+hardcoded contract — produces the torn-apart pair instead. So decision 6's
+divergence from Ruff is not a precaution: taking Ruff's contract unchanged
+demonstrably changes gsfmt's output.
 
 **`AllLines` is necessary but not sufficient**, and the pair/plain choice is
 not a fitting question at all. For
