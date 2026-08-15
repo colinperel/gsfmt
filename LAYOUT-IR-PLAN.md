@@ -57,8 +57,7 @@ place here.
 | element | purpose in gsfmt |
 |---|---|
 | `Token(&'static str)` | punctuation the formatter owns: `(`, `)`, `,` |
-| `SourceSlice(range)` | every leaf gsfmt copies verbatim |
-| `Text(String)` | the two leaves gsfmt rewrites — see decision 2 |
+| `Text(String, TextWidth)` | every leaf, verbatim or rewritten — see decision 2 |
 | `Space` | the one between an operator and its operand |
 | `Line(Soft)` | break only if the enclosing group breaks |
 | `Line(SoftOrSpace)` | a space when flat, a break when the group breaks |
@@ -75,7 +74,7 @@ place here.
 | gsfmt today | becomes |
 |---|---|
 | `min_group_width`, `min_items_width`, `min_chunk_width`, `min_pairs_width`, `MinWidth` — 206 lines | deleted; `fits` walks the print stream |
-| `pair_layout_fits` strategy choice | `BestFitting{[pairs, plain]}`, `AllLines` |
+| `pair_layout_fits` strategy choice | `BestFitting{[pairs, plain, pairs]}`, `AllLines` |
 | `pairs_align`, `PairKeys`, the gutter | `IfFlat(spaces(pad))`, the pad computed once before building the IR |
 | `pair_value_col` / `stays_inline` | a `Group` around the value; it breaks or it does not |
 | `always_breaks` (LET) | `Line(Hard)` inside the group |
@@ -115,18 +114,20 @@ These are real choices, not implementation detail. Settle them before step 3.
    the case that broke the first attempt. Either order the variants to suit,
    or keep gsfmt's rule and document the divergence.
 
-2. **Byte preservation, and its two exceptions.** gsfmt's contract is that
-   only whitespace between tokens may change — *with two sanctioned
-   rewrites*, both of which mutate a leaf today:
-   `normalize_separators` sets `sep.text = ","` in the dot locale, and
-   `uppercase_function_heads` sets `h.text = h.text.to_uppercase()` under
-   `--uppercase`. So "every leaf is a source slice" is wrong as stated: the
-   IR needs an owned-text element alongside `SourceSlice`, and the builder
-   decides which a given leaf gets. Both rewrites need their own migration
-   gate — `comma_locale.gsfx` for the first, the uppercase tests for the
-   second. Separately, Ruff's `text()` asserts its input has no newlines;
-   gsfmt's string literals do, so gsfmt's owned-text element must carry the
-   `Multiline` width state rather than reuse Ruff's assertion.
+2. **One text element, not Ruff's two.** Ruff splits `Text` (owned) from
+   `SourceCodeSlice` (borrowed) as a memory optimisation, and its
+   `source_text_slice` builder carries `debug_assert_no_newlines`. Neither
+   half of that transfers. gsfmt's `Token` already owns its text
+   (`pub text: String`), so there is nothing to borrow; and gsfmt's leaves
+   include string literals carrying newlines, which that assertion forbids.
+
+   So: a single `Text(String, TextWidth)` element, where `TextWidth` is
+   `Width(n)` or `Multiline`, used for every leaf. That also absorbs the two
+   sanctioned rewrites, which mutate leaves today — `normalize_separators`
+   sets `sep.text = ","` in the dot locale, `uppercase_function_heads` sets
+   `h.text = h.text.to_uppercase()` under `--uppercase`. Both need their own
+   migration gate: `comma_locale.gsfx` for the first, the uppercase tests for
+   the second.
 
 3. **Blank arguments.** `IF(a,,b)` holds an argument with zero tokens and
    must round-trip. It is an empty entry between two separators; confirm that
@@ -136,7 +137,21 @@ These are real choices, not implementation detail. Settle them before step 3.
    `Decimal::Comma`. Separators are `Token`s owned by the builder, so the
    builder has to read the locale rather than hard-code `,`.
 
-6. **`BestFitting` mode.** Ruff defaults to `BestFittingMode::FirstLine`,
+6. **`BestFitting` needs three variants, not two, and `AllLines`.**
+
+   Ruff prints the *last* variant unconditionally, without measuring it —
+   `// No variant fits, take the last (most expanded) as fallback`. So
+   `[pairs, plain]` does not preserve today's policy: when neither fits it
+   would select plain, where `pair_layout_fits` deliberately keeps pairs.
+   Reversing to `[plain, pairs]` breaks the ordinary prefer-pairs case
+   instead. Ordering cannot express it with two.
+
+   `[pairs, plain, pairs]` does, exactly: pairs if pairs fit, else plain if
+   plain fits, else pairs unmeasured — which is the current rule stated as
+   an ordered list. The repetition looks odd and is idiomatic; it is how the
+   unconditional-last-variant contract is used.
+
+   On the mode: Ruff defaults to `BestFittingMode::FirstLine`,
    where a variant is chosen if the content up to its *first* line break
    fits. That is wrong for gsfmt and would silently disable the fallback:
    the pairs variant opens with `LET(` or `SUMIFS(`, which always fits, so
@@ -168,11 +183,15 @@ rewrite of *how* the layout is decided, not of what it produces.
 2. Build the IR for the shapes with no pair layout — calls, arrays, operator
    chains, blank arguments. Print through the new printer behind a flag.
    Gate: `gnarly.gsfx` byte-identical.
-3. Pair layout as `BestFitting{[pairs, plain]}` in `AllLines` mode, plus the
-   `IfFlat` gutter. Gate: `pair_layout_yields_to_breakable_oversized_keys`
-   first — it is the test that catches a wrong mode — then `monthly.gsfx`
-   and `payperiods.gsfx` byte-identical. (Locally, also the 760-line formula
-   at width 82; see the note at the top.)
+3. Pair layout as `BestFitting{[pairs, plain, pairs]}` in `AllLines` mode,
+   plus the `IfFlat` gutter. Gate in this order, because each catches a
+   different half of decision 6:
+   `pair_layout_yields_to_breakable_oversized_keys` first — its `SUMIFS`
+   case fails on a wrong *mode* (`FirstLine` never reaches the oversized
+   key) and its `veryLongBindingNameHere` case fails on a wrong *fallback*
+   (two variants would yield plain where the rule keeps pairs) — then
+   `monthly.gsfx` and `payperiods.gsfx` byte-identical. (Locally, also the
+   760-line formula at width 82; see the note at the top.)
 4. Delete the `min_*` family and the old `layout_*` family. Re-point the
    `the_width_bound_*` tests at emitted geometry; any that only made sense
    against the deleted bound should be said so, not deleted quietly.
