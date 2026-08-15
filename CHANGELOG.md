@@ -51,6 +51,13 @@ than it did. Reformat in one commit and read the diff.
 
 ### Fixes
 
+- **A group is charged only the first line of the suffix that follows it.**
+  In a `QUERY` whose SELECT text is interleaved with `TEXT(…)` calls, the
+  hundreds of characters of embedded query after the last call were all
+  charged to that call's closing line, though they start on lines of their
+  own. The call opened out while every physical line already fit — two
+  identical `TEXT(…)` calls stayed inline and a third did not.
+
 - **The alignment gutter is sized by the keys that use it.** A key whose
   value hangs on the line below never occupies the gutter, but it was still
   setting the width of it, so every other binding in the group paid for
