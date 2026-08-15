@@ -158,6 +158,89 @@ fn monthly_minify_round_trips() {
     assert_eq!(fmt(include_str!("data/monthly.min.gsfx")), flattened);
 }
 
+/// A 68-binding `LET` — the shape that surfaced every layout defect in #19,
+/// #20 and #21, anonymised from the production formula that reported them.
+/// It is the only fixture exercising the aligned gutter at its cap, hanging
+/// values, and authored blank-line groups together and at scale: 421 lines,
+/// a 26-column widest key, 39 pairs whose value hangs, and nothing over the
+/// width. `segments_golden_keeps_its_shape` holds those numbers exactly.
+#[test]
+fn segments_golden_is_a_fixed_point() {
+    let golden = include_str!("data/segments.gsfx");
+    assert_eq!(fmt(golden), golden);
+}
+
+#[test]
+fn segments_minify_round_trips() {
+    let golden = include_str!("data/segments.gsfx");
+    assert_eq!(min(golden), include_str!("data/segments.min.gsfx"));
+    let mut flattened = String::new();
+    for line in golden.lines().filter(|l| !l.trim().is_empty()) {
+        flattened.push_str(line);
+        flattened.push('\n');
+    }
+    assert_eq!(fmt(include_str!("data/segments.min.gsfx")), flattened);
+}
+
+/// The properties that make the fixture worth its 421 lines, asserted
+/// exactly rather than described. A fixture this size erodes quietly: a
+/// rename that shortens the widest key narrows the gutter, a layout change
+/// that stops hanging values flattens the shape, and every test leaning on
+/// it gets weaker without anything failing. Exact numbers turn that into a
+/// failure — and a deliberate change here is one line to update, with the
+/// diff showing exactly what moved.
+#[test]
+fn segments_golden_keeps_its_shape() {
+    // A top-level binding occupies one line: two spaces, an identifier, a
+    // comma. Either the value follows on that line (aligned to the gutter)
+    // or the line ends there and the value hangs below.
+    fn key_of(l: &str) -> Option<&str> {
+        let rest = l.strip_prefix("  ")?;
+        let key = rest.split_once(',')?.0;
+        (!key.is_empty() && key.chars().all(|c| c.is_alphanumeric() || c == '_')).then_some(key)
+    }
+
+    let golden = include_str!("data/segments.gsfx");
+    let bindings: Vec<&str> = golden.lines().filter(|l| key_of(l).is_some()).collect();
+
+    // Hanging is the *exact* form `  key,` — an aligned line also ends in a
+    // comma, so anything looser counts all 68 and can never detect
+    // flattening, which is what this assertion exists to catch.
+    let hanging = bindings
+        .iter()
+        .filter(|l| key_of(l).is_some_and(|k| l.len() == k.len() + 3))
+        .count();
+
+    assert_eq!(bindings.len(), 68, "binding count");
+    assert_eq!(
+        hanging, 39,
+        "pairs whose value hangs — the pair_value_col decision"
+    );
+    assert_eq!(bindings.len() - hanging, 29, "pairs aligned to the gutter");
+    assert_eq!(
+        bindings
+            .iter()
+            .filter_map(|l| key_of(l))
+            .map(str::len)
+            .max(),
+        Some(26),
+        "widest key — what stresses ALIGN_MAX and sets the gutter"
+    );
+    assert_eq!(golden.lines().count(), 421, "line count");
+    assert_eq!(
+        golden.lines().map(|l| l.len() - l.trim_start().len()).max(),
+        Some(16),
+        "max indent — the nesting depth the fixture reaches"
+    );
+    for line in golden.lines() {
+        assert!(
+            line.len() <= WIDTH,
+            "overflow ({} cols): {line}",
+            line.len()
+        );
+    }
+}
+
 // ───────────────────────────────────────────────────────────── property ──
 
 #[test]
