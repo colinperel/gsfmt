@@ -72,14 +72,15 @@ place here.
 | `Group` | the unit of fits-or-breaks |
 | `Indent` | one nesting step |
 | `IfFlat` | the pair gutter — padding that exists only while the pair is flat |
-| `BestFitting{variants, mode, fallback}` | pair layout versus the plain per-argument layout — mode *and* fallback are load-bearing, see decision 6 |
+| `BestFitting{variants, mode, fallback}` | pair layout versus the plain per-argument layout, *once pairs are viable at all* — mode and fallback are both load-bearing, see decision 6 |
 
 ## Mapping
 
 | gsfmt today | becomes |
 |---|---|
-| all of `layout/bound.rs` — 206 lines | deleted; `fits` walks the print stream |
-| `pair_layout_fits` strategy choice | `BestFitting{[pairs, plain], AllLines, fallback: 0}` |
+| `layout/bound.rs` — 206 lines | deleted, less the key check, which becomes a trial print of one key; `fits` walks the print stream for everything else |
+| `pair_layout_fits`' key check | a build-time trial of each key; disqualifies pairs outright |
+| `pair_layout_fits`' width comparison | `BestFitting{[pairs, plain], AllLines, fallback: 0}` |
 | `pairs_align`, `PairKeys`, the gutter | `IfFlat(spaces(pad))`, the pad computed once before building the IR |
 | `pair_value_col` / `stays_inline` | a `Group` around the value; it breaks or it does not |
 | `always_breaks` (LET) | `Line(Hard)` inside the group |
@@ -106,7 +107,10 @@ whether it becomes none is the style question.
 between two others, so whatever measures the block measures the separator;
 there is nothing to thread and nothing to forget to thread.
 
-**The predictor/renderer split from #21** disappears with the predictor.
+**The predictor/renderer split from #21** mostly disappears. One question
+survives — is a key breakable and oversized — and it is answered by
+trial-printing that key rather than modelling it, so there is no second
+model, only a smaller measurement. See the spike section.
 
 ## Decisions this forces
 
@@ -148,7 +152,9 @@ These are real choices, not implementation detail. Settle them before step 3.
    adopt Ruff's rule and accept the style change, or keep physical-line
    measurement, which is implementable in `fits` alone.
 
-6. **`BestFitting` needs an explicit fallback and `AllLines`.**
+6. **`BestFitting` needs an explicit fallback and `AllLines` — and cannot
+   make the choice alone.** The spike section below shows the part it
+   cannot do; this decision covers the part it can.
 
    Ruff prints the *last* variant unconditionally, without measuring it —
    `// No variant fits, take the last (most expanded) as fallback`. So
@@ -180,13 +186,27 @@ These are real choices, not implementation detail. Settle them before step 3.
    Either way, gate IR *construction* against the depth-99 shape, not just
    printing: this is a cost that lands before any measurement.
 
-   On the mode: Ruff defaults to `BestFittingMode::FirstLine`,
-   where a variant is chosen if the content up to its *first* line break
-   fits. That is wrong for gsfmt and would silently disable the fallback:
-   the pairs variant opens with `LET(` or `SUMIFS(`, which always fits, so
-   `FirstLine` selects pairs before an oversized key or value is ever
-   measured — and `pair_layout_yields_to_breakable_oversized_keys` would
-   fail. gsfmt needs `AllLines`.
+   On the mode: Ruff defaults to `BestFittingMode::FirstLine`, where a
+   variant is chosen if the content up to its *first* line break fits. The
+   pairs variant opens with `LET(` or `SUMIFS(`, which always fits, so
+   `FirstLine` would select pairs without ever looking at the lines that
+   overflow. gsfmt needs `AllLines`.
+
+   The gate for this is the second case of
+   `a_pair_that_overflows_side_by_side_hangs_rather_than_yielding`:
+   `SUMIFS(qC, someRange, criterionThatFitsAlone)` at width 24. It is the
+   shape that separates the two modes — every key is a plain name, so the
+   build-time check does not disqualify pairs and both variants are
+   genuinely in play; the pairs opening line is seven columns, so
+   `FirstLine` accepts it; the pair line beneath is thirty-five, so
+   `AllLines` rejects it; and plain's widest line is exactly twenty-four,
+   so plain wins. gsfmt emits plain here today.
+
+   Note what this is *not*: the `SUMIFS(qC, INDIRECT(…), criterion)` case
+   from the same test cannot gate the mode, because the build-time key
+   check short-circuits it before `BestFitting` is reached. An earlier
+   revision of this document named it, which would have left `AllLines`
+   with no regression coverage at all.
 
    `AllLines` carries its own catch worth designing around: a variant does
    not fit if it contains a hard line break *outside* a group in expanded
@@ -206,13 +226,17 @@ rewrite of *how* the layout is decided, not of what it produces.
 2. Build the IR for the shapes with no pair layout — calls, arrays, operator
    chains, blank arguments. Print through the new printer behind a flag.
    Gate: `gnarly.gsfx` byte-identical.
-3. Pair layout as `BestFitting{[pairs, plain], AllLines, fallback: 0}`, plus
-   the `IfFlat` gutter. Gate in this order, because each catches a
-   different half of decision 6:
+3. Pair layout, in two parts, because the choice is made in two places.
+   First the build-time key check: if any key is breakable and oversized,
+   emit the plain document and stop — `BestFitting` cannot recover this and
+   the spike proves it. Otherwise emit
+   `BestFitting{[pairs, plain], AllLines, fallback: 0}` plus the `IfFlat`
+   gutter. Gate in this order, because each case catches a different piece:
    `pair_layout_yields_to_breakable_oversized_keys` first — its `SUMIFS`
-   case fails on a wrong *mode* (`FirstLine` never reaches the oversized
-   key) and its `veryLongBindingNameHere` case fails on a wrong *fallback*
-   (two variants would yield plain where the rule keeps pairs) — then
+   case fails without the *key check* (both variants overflow, so no mode
+   or fallback saves it) and its `veryLongBindingNameHere` case fails on a
+   wrong *fallback* (two variants would yield plain where the rule keeps
+   pairs) — then
    `monthly.gsfx` and `payperiods.gsfx` byte-identical. (Locally, also the
    760-line formula at width 82; see the note at the top.)
 4. Delete `src/layout/` entirely. Re-point the
@@ -310,10 +334,49 @@ produced those five findings. The difference, and it is still the whole
 point, is that there is exactly *one* `fits` rather than five hand-kept
 copies. The class collapses from five sites to one, not to zero.
 
+### `BestFitting`, tested
+
+The spike was extended with three cases: the mode, the fallback, and what
+Ruff's hardcoded fallback would do instead. Two reproduce gsfmt's output.
+The third does not, and it changes the design.
+
+**`fallback: 0` works.** `LET(veryLongBindingNameHere, 1, ...)` at width 18
+is the case where neither layout fits and gsfmt keeps pairs; the spike
+reproduces it. Repointing the fallback at the last variant — Ruff's
+hardcoded contract — produces the torn-apart pair instead. So decision 6's
+divergence from Ruff is not a precaution: taking Ruff's contract unchanged
+demonstrably changes gsfmt's output.
+
+**`AllLines` is necessary but not sufficient**, and the pair/plain choice is
+not a fitting question at all. For
+`SUMIFS(qC, INDIRECT("A" & someLongNamedCell), criterion)` at width 24,
+gsfmt takes the plain layout. The spike reproduces that plain document
+byte-for-byte — but its widest line is 25 columns against a width of 24,
+because `& someLongNamedCell` cannot break any further. So `AllLines`
+rejects plain, `AllLines` rejects pairs, and `fallback: 0` selects pairs.
+gsfmt selects plain.
+
+It selects plain because `pair_layout_fits` asks a different question
+first: is any key *breakable and oversized* — would it get narrower if
+broken? That is a property of one key, not a comparison between two
+layouts, and no ordering, mode or fallback index inside `BestFitting` can
+recover it. This is the same fact that killed the first plan, reappearing
+in a third form.
+
+**The consequence for the design.** The viability of pair layout is decided
+when the document is *built*, not when it is printed:
+
+    if any key is breakable and oversized -> emit the plain document
+    otherwise                             -> emit BestFitting{[pairs, plain], AllLines, fallback: 0}
+
+That check is local — it measures one key, not a subtree — so it is a
+bounded trial of a small document rather than a second model of the whole
+layout. It is the one piece of `layout/bound.rs`'s job that survives, and
+it survives in a form that cannot drift from the renderer, because it
+measures by printing.
+
 ### Still untested
 
-`BestFitting` and the pairs-versus-plain fallback; blank arguments
-(`IF(a,,b)`); comma-locale separators; the packed opening line
-(`SUMIFS(qC,` with leading simple arguments); and performance against the
-depth-99 chain. The fallback case is the one most likely to hold another
-surprise, since it is what broke the previous plan.
+Blank arguments (`IF(a,,b)`); comma-locale separators; the packed opening
+line (`SUMIFS(qC,` with leading simple arguments — the spike hand-built it
+rather than deriving it); and performance against the depth-99 chain.
