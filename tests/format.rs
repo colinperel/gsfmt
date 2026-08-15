@@ -920,22 +920,32 @@ fn pair_layout_yields_to_breakable_oversized_keys() {
 }
 
 /// A pair whose key and value are both fine alone but overflow side by
-/// side takes the plain per-argument layout — pair layout pins them to one
-/// line, and here falling back genuinely fits.
+/// side keeps pair layout, with the value on the line below.
+///
+/// This test used to assert the plain per-argument layout here, on the
+/// reasoning that pair layout pinned a key and its value to one line so
+/// falling back was the only way to fit. Hanging retired that premise:
+/// the pair no longer has to be one line, so the pairing survives a value
+/// that cannot sit beside its key, and the fallback is not needed to fit.
+///
+/// It still fires when hanging cannot rescue the pair either — the second
+/// case, where the value overflows the line below as well.
 #[test]
-fn pair_layout_yields_when_a_whole_pair_overflows() {
+fn a_pair_that_overflows_side_by_side_hangs_rather_than_yielding() {
     let out = fmt(
         "=SUMIFS(sumRange,criteriaRangeWithDescriptiveNameForInvoices,\
 criterionValueWithDescriptiveNameForInvoices)",
     );
     assert_eq!(
         out,
-        "=SUMIFS(\n  sumRange,\n  criteriaRangeWithDescriptiveNameForInvoices,\n  \
+        "=SUMIFS(\n  sumRange,\n  criteriaRangeWithDescriptiveNameForInvoices,\n    \
 criterionValueWithDescriptiveNameForInvoices\n)\n"
     );
     assert!(out.lines().all(|l| l.len() <= WIDTH), "overflow:\n{out}");
-    // the final argument carries no separator, so a criterion that fits
-    // the width exactly at plain indentation still triggers the fallback
+
+    // Hanging buys nothing here — the criterion overflows the line below
+    // too — so the group still takes the plain layout, and the final
+    // argument carrying no separator is what lets it fit there.
     assert_eq!(
         fmt_w("=SUMIFS(qC,someRange,criterionThatFitsAlone)", 24).unwrap(),
         "=SUMIFS(\n  qC,\n  someRange,\n  criterionThatFitsAlone\n)\n"
@@ -1286,6 +1296,158 @@ fn a_block_fits_only_if_its_trailing_separator_fits_too() {
                     );
                 }
             }
+        }
+    }
+}
+
+/// Hanging is gated on whether it *helps*, not on whether the value can
+/// break. A value with nowhere to break inside it is not thereby beyond
+/// help: a bare `0.55` under a 23-column key overflows a narrow window
+/// only because the key's gutter pushed it there, and the line below fits
+/// it with room to spare. Reading "cannot break" as "cannot be helped"
+/// left exactly those pairs overflowing, since what had to move was the
+/// value itself rather than anything inside it.
+#[test]
+fn an_unbreakable_value_hangs_when_that_is_what_makes_it_fit() {
+    assert_eq!(
+        fmt_w("=LET(shoulderPotentialFactor, 0.55, x, 1, x)", 30).unwrap(),
+        "=LET(\n  shoulderPotentialFactor,\n    0.55,\n  x,                       1,\n  x\n)\n"
+    );
+
+    // Hanging must buy the line it costs. It buys nothing when the key
+    // overflows the line it would be left alone on — the pair is over the
+    // width either way, so spending a line fixes nothing.
+    assert_eq!(
+        fmt_w(
+            "=LET(veryLongBindingNameHere,1,veryLongBindingNameHere+1)",
+            18
+        )
+        .unwrap(),
+        "=LET(\n  veryLongBindingNameHere, 1,\n  veryLongBindingNameHere\n    + 1\n)\n"
+    );
+
+    // Nor when the value overflows the line below as well.
+    assert_eq!(
+        fmt_w("=LET(kk,aVeryLongUnbreakableReferenceName,kk)", 24).unwrap(),
+        "=LET(\n  kk, aVeryLongUnbreakableReferenceName,\n  kk\n)\n"
+    );
+
+    // A newline inside a string literal is content, so such a value already
+    // spans lines wherever it goes. Judging it by its whole span reports a
+    // width neither column would emit, and the hang that would have fit was
+    // declined: this used to put 26 columns on a 15-column window.
+    let out = fmt_w("=LET(longKeyHere,\"aaaaaaaaaa\nb\",z,1,z)", 15).unwrap();
+    assert_eq!(
+        out,
+        "=LET(\n  longKeyHere,\n    \"aaaaaaaaaa\nb\",\n  z, 1,\n  z\n)\n"
+    );
+
+    // A key can carry a newline too — SWITCH and IFS match on string
+    // literals — so every column derived from it comes off the line it
+    // really ends on. Reading its span as one line put its end at column 26
+    // when the text stops at 12: the hang was refused and 18 columns landed
+    // on a 17-column window, and the group did not align at all.
+    let multiline_key = "=SWITCH(x,\"aaaaaaaaaa\nbbbbbbbbbb\",0.55,\"z\",1)";
+    let out = fmt_w(multiline_key, 17).unwrap();
+    assert_eq!(
+        out,
+        "=SWITCH(\n  x,\n  \"aaaaaaaaaa\nbbbbbbbbbb\",\n    0.55,\n  \"z\",       1\n)\n"
+    );
+    for line in out.lines() {
+        assert!(line.chars().count() <= 17, "overflow:\n{out}");
+    }
+
+    // One column wider and the value fits beside that key, landing exactly
+    // on the window — the boundary the span measure could not see.
+    let out = fmt_w(multiline_key, 18).unwrap();
+    assert_eq!(
+        out,
+        "=SWITCH(\n  x,\n  \"aaaaaaaaaa\nbbbbbbbbbb\", 0.55,\n  \"z\",       1\n)\n"
+    );
+    for line in out.lines() {
+        assert!(line.chars().count() <= 18, "overflow:\n{out}");
+    }
+
+    // A breakable multiline key reaches the same arithmetic by a different
+    // route — `pair_layout_fits` decides whether the group gets pairs at
+    // all. Measuring the key's span sent this to the plain per-argument
+    // layout even though every physical line fits in pair layout.
+    let out = fmt_w("=SWITCH(x,\"aaaa\nbbbb\" & z,1,\"q\",2)", 15).unwrap();
+    assert_eq!(
+        out,
+        "=SWITCH(\n  x,\n  \"aaaa\nbbbb\" & z, 1,\n  \"q\",     2\n)\n"
+    );
+    for line in out.lines() {
+        assert!(line.chars().count() <= 15, "overflow:\n{out}");
+    }
+
+    // The bound reaches the same arithmetic from the other side: a value
+    // that fits beside its key on every physical line was reported as the
+    // sum of them, so the whole group was refused pair layout.
+    let out = fmt_w("=LET(keyxx,\"aaaa\nb\",z,1,z)", 15).unwrap();
+    assert_eq!(out, "=LET(\n  keyxx, \"aaaa\nb\",\n  z,     1,\n  z\n)\n");
+    for line in out.lines() {
+        assert!(line.chars().count() <= 15, "overflow:\n{out}");
+    }
+
+    // A group opens where the text before it *ends*, which for a prefix
+    // carrying a newline is its final line, not the sum of them. Charging
+    // the whole span pushed this `SUM` to a column it never occupies and
+    // opened it out for width it was not using.
+    let out = fmt_w("=IF(cond, \"aaaa\nb\" & SUM(alpha,beta), yy)", 24).unwrap();
+    assert_eq!(
+        out,
+        "=IF(cond,\n  \"aaaa\nb\" & SUM(alpha, beta),\n  yy\n)\n"
+    );
+    for line in out.lines() {
+        assert!(line.chars().count() <= 24, "overflow:\n{out}");
+    }
+
+    // Predicting where a value goes has to mirror what the renderer will
+    // then do with it, not what would be nicer. The renderer opens out a
+    // breakable group whose inline form carries a newline, so judging that
+    // value by its physical lines put it beside the key and the renderer
+    // expanded it there — a tower at the aligned column, which is the shape
+    // all of this exists to prevent.
+    let out = fmt_w("=LET(longkey,SUM(\"aaaa\nb\"),z,1,z)", 20).unwrap();
+    assert_eq!(
+        out,
+        "=LET(\n  longkey,\n    SUM(\"aaaa\nb\"),\n  z,       1,\n  z\n)\n"
+    );
+    for line in out.lines() {
+        assert!(line.chars().count() <= 20, "overflow:\n{out}");
+    }
+
+    // "Breakable" is not "will break". A chain splits only under real width
+    // pressure, measured on physical lines, so one whose lines already fit
+    // is emitted as rendered even though the inline shortcut turned it down
+    // on its span. Predicting an expansion that never comes hung this value
+    // although beside its key it lands exactly on the window.
+    let out = fmt_w("=LET(longkey,\"aaaaaaaaaa\nb\" & c,z,1,z)", 22).unwrap();
+    assert_eq!(
+        out,
+        "=LET(\n  longkey, \"aaaaaaaaaa\nb\" & c,\n  z,       1,\n  z\n)\n"
+    );
+    for line in out.lines() {
+        assert!(line.chars().count() <= 22, "overflow:\n{out}");
+    }
+
+    // The policy is fit-based, not improvement-based: hanging is taken when
+    // it makes the pair fit, never merely to shave columns off a pair that
+    // overflows either way. So the guarantee is conditional — once the key
+    // fits the line it would be left alone on, nothing here overflows.
+    // (Below that the widest line can grow as the window shrinks, which is
+    // that policy showing through, not a layout failure.)
+    let src = "=LET(shoulderPotentialFactor, 0.55, someOtherBinding, 12345, x, 1, x)";
+    let key_line = "  shoulderPotentialFactor,".chars().count();
+    for width in key_line..=90 {
+        let out = fmt_w(src, width).unwrap();
+        for line in out.lines() {
+            assert!(
+                line.chars().count() <= width,
+                "overflow at width={width} ({} cols):\n{out}",
+                line.chars().count()
+            );
         }
     }
 }

@@ -878,10 +878,17 @@ fn cols(s: &str) -> usize {
 /// multi-line string was being split at its operators even though every
 /// physical line fit — a break that shortens nothing.
 ///
-/// Used only for sequence-level decisions in [`layout_items`]. Group fit
-/// checks deliberately keep the full-span measure: a group whose inline
-/// render spans lines cannot be a single line anyway, and the span is what
-/// pushes it to open out.
+/// Backs [`emitted_span`], and through it every fit decision in pair
+/// layout and the prefix/suffix columns in [`min_chunk_width`] and
+/// [`layout_items`].
+///
+/// What deliberately does *not* use it: the inline shortcuts in
+/// [`layout_items`], [`layout_group`] and [`format`], which keep the
+/// full-span measure. Those ask whether a fragment is a single line at
+/// all, not whether it fits — a formula carrying a newline inside a string
+/// literal is not one line, and collapsing the structure around such a
+/// string buries the nesting a reader needs, however comfortably each
+/// physical line happens to fit.
 fn emitted_widest(col: usize, s: &str) -> usize {
     match s.split_once('\n') {
         None => col + cols(s),
@@ -902,6 +909,72 @@ fn emitted_last(col: usize, s: &str) -> usize {
     }
 }
 
+/// Widest physical line `s` occupies placed at `col`, counting `pending`
+/// columns appended to its final line.
+///
+/// Every fit decision in pair layout goes through here, deliberately. A
+/// newline inside a string literal is content, so a fragment can already
+/// span lines before layout touches it: measuring its whole span as one
+/// line reports a width nothing would ever emit. And what a caller appends
+/// lands on the final line, which is not always the widest one. Three
+/// separate fit tests in this module were written with `cols()` in this
+/// position and all three were wrong in exactly that way — for a value
+/// beside its key, for the same value hung below it, and for the key.
+fn emitted_span(col: usize, s: &str, pending: usize) -> usize {
+    emitted_widest(col, s).max(emitted_last(col, s) + pending)
+}
+
+/// Where a pair-laid group's keys end and its values begin.
+///
+/// `ends[p]` is the column at which key `p`'s **final physical line** ends —
+/// not `arg_indent + cols(key)`, which reads a key carrying a newline
+/// inside a string literal (`SWITCH` and `IFS` match on strings) as one
+/// continuous line and reports a column no line reaches. For a single-line
+/// key the two are the same number, so this generalises the arithmetic
+/// rather than changing it.
+///
+/// `value_col(p)` is where that key's value starts when it sits beside the
+/// key: a shared column derived from the widest key when the group aligns,
+/// otherwise one space past this key's own end.
+///
+/// Computed here once and used by both [`min_pairs_width`] and
+/// [`layout_pairs`], because every time this arithmetic has been written
+/// twice the two copies have eventually disagreed.
+struct PairKeys {
+    ends: Vec<usize>,
+    aligned: bool,
+    shared_col: usize,
+}
+
+impl PairKeys {
+    fn new(keys: &[String], arg_indent: usize, width: usize) -> Self {
+        let ends: Vec<usize> = keys.iter().map(|k| emitted_last(arg_indent, k)).collect();
+        let widest = ends.iter().copied().max().unwrap_or(arg_indent);
+        let aligned = pairs_align(widest.saturating_sub(arg_indent), arg_indent, width);
+        Self {
+            ends,
+            aligned,
+            shared_col: widest + 2,
+        }
+    }
+
+    fn value_col(&self, p: usize) -> usize {
+        if self.aligned {
+            self.shared_col
+        } else {
+            self.ends[p] + 2
+        }
+    }
+}
+
+/// Width of the line a key is left alone on when its value hangs below it:
+/// the key, with the separator that follows it on its final line. Keys are
+/// not always one line — `SWITCH` and `IFS` match on string literals, which
+/// may carry a newline.
+fn key_line_width(key: &str, arg_indent: usize, sep: usize) -> usize {
+    emitted_span(arg_indent, key, sep)
+}
+
 /// A block's width bound. `widest` is the widest line the block could need;
 /// `last` is where its final line ends — the column at which a separator
 /// appended by the caller would land. `last <= widest` always holds.
@@ -912,10 +985,6 @@ struct MinWidth {
 }
 
 impl MinWidth {
-    fn flat(w: usize) -> Self {
-        Self { widest: w, last: w }
-    }
-
     /// Widest line once `sep` columns are appended to the final line.
     fn with_sep(self, sep: usize) -> usize {
         self.widest.max(self.last + sep)
@@ -1045,6 +1114,31 @@ fn pairs_align(widest_key: usize, arg_indent: usize, width: usize) -> bool {
     widest_key + 2 <= ALIGN_MAX && arg_indent + widest_key + 2 < width
 }
 
+/// Whether `layout_items` will keep `value` on one block placed at `col`.
+///
+/// This mirrors the renderer's decision rather than improving on it. The
+/// inline shortcut asks the *span* question — is this fragment a single
+/// line at all — and a value carrying a newline inside a string literal is
+/// not, so a value holding a breakable group is opened out there however
+/// well its physical lines fit. Predicting otherwise is how a value came to
+/// be placed beside its key only for the renderer to expand it into a tower
+/// at that column: the bound-disagrees-with-layout fault the rest of this
+/// module exists to prevent.
+///
+/// The second clause covers what the shortcut does not govern: with no
+/// group to open, `layout_items` emits the value exactly as rendered
+/// whichever way the shortcut went — an operator chain included, since a
+/// chain splits only under width pressure measured on physical lines. So
+/// its physical lines are what reach the page.
+fn stays_inline(value: &[Node], inline: &str, col: usize, width: usize, pending: usize) -> bool {
+    if contains_authored_grouping(value) {
+        return false;
+    }
+    let renderer_keeps_it =
+        col + cols(inline) <= width && emitted_last(col, inline) + pending <= width;
+    renderer_keeps_it || (!has_openable_group(value) && emitted_span(col, inline, pending) <= width)
+}
+
 /// Where a pair's value block starts: beside its key at `aligned_col`, or
 /// hanging on its own line one step in from the key.
 ///
@@ -1058,11 +1152,19 @@ fn pairs_align(widest_key: usize, arg_indent: usize, width: usize) -> bool {
 /// every modern formatter does with a binding whose value will not fit
 /// beside it.
 ///
-/// Two shapes stay beside the key. A value that cannot break — a single
-/// long reference — would still overflow hung, so moving it only spends a
-/// line (the stance `pair_layout_fits` takes on an oversized key). And a
-/// key so short that hanging would not move the value left has nothing to
-/// gain either.
+/// Hanging costs a line, so it has to buy one. A value that can break buys
+/// room for its own body and always takes it. A value that cannot break —
+/// a single long reference, a bare number — buys nothing unless the whole
+/// run then fits on the line below, *and* the key fits the line it is left
+/// alone on: otherwise the pair overflows wherever the value goes, and
+/// moving it only spends the line (the stance `pair_layout_fits` takes on
+/// an oversized key). A key so short that hanging would not move the value
+/// left has nothing to gain either.
+///
+/// Reading "cannot break" as "cannot be helped" is the trap here. A bare
+/// `0.55` under a 23-column key overflows a narrow window only because the
+/// key's gutter pushed it there; one line down it fits with room to spare.
+/// The thing that had to move was the value, not anything inside it.
 ///
 /// The decision reads only this level: an inline render and a scan for
 /// breakable positions, never a recursive width probe. Measuring the value
@@ -1074,16 +1176,29 @@ fn pair_value_col(
     arg_indent: usize,
     width: usize,
     pending: usize,
+    key_line: usize,
 ) -> usize {
     let hang = arg_indent + INDENT;
-    if hang >= aligned_col || !is_breakable(value) {
+    if hang >= aligned_col {
         return aligned_col;
     }
+    // Both columns are judged the same way, on the physical lines each
+    // would emit: a newline inside a string literal is content, so such a
+    // value already spans lines wherever it is put, and measuring its whole
+    // span as one line reports a width neither column would produce. The
+    // separator lands on the final line, which is not always the widest.
     let inline = render_inline(value, false).0;
-    let must_break = contains_authored_grouping(value)
-        || aligned_col + cols(&inline) > width
-        || emitted_last(aligned_col, &inline) + pending > width;
-    if must_break {
+    if stays_inline(value, &inline, aligned_col, width, pending) {
+        return aligned_col;
+    }
+    // It cannot stay beside the key, so hanging has to buy something for
+    // the line it costs. A value that can break buys room for its own body.
+    // One that cannot buys nothing unless the whole run then fits — and
+    // only if the key fits the line it is left alone on, since otherwise
+    // the pair overflows wherever the value goes.
+    if is_breakable(value)
+        || (key_line <= width && stays_inline(value, &inline, hang, width, pending))
+    {
         hang
     } else {
         aligned_col
@@ -1094,10 +1209,21 @@ fn pair_value_col(
 /// or a group that can open out. Everything else is one unbreakable run,
 /// and no column it is placed at changes how many lines it takes.
 fn is_breakable(items: &[Node]) -> bool {
-    !binary_op_positions(items).is_empty()
-        || items
-            .iter()
-            .any(|n| matches!(n, Node::Group(g) if !g.is_empty_call()))
+    !binary_op_positions(items).is_empty() || has_openable_group(items)
+}
+
+/// True when a sequence holds a group that can open out — the only thing
+/// `layout_items` expands once its inline shortcut has declined.
+///
+/// Operators are not enough. A chain breaks only under real width
+/// pressure, measured on physical lines, so a chain whose lines already fit
+/// is emitted exactly as rendered even though the shortcut turned it down
+/// on its span. Treating "breakable" as "will expand" hung such values for
+/// nothing.
+fn has_openable_group(items: &[Node]) -> bool {
+    items
+        .iter()
+        .any(|n| matches!(n, Node::Group(g) if !g.is_empty_call()))
 }
 
 /// Minimum width of a pair-aligned body, mirroring `layout_pairs`' columns —
@@ -1112,8 +1238,7 @@ fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize, width: usize) -> u
     let keys: Vec<String> = (0..pair_count)
         .map(|p| render_inline(&g.args[key_of(p)], false).0)
         .collect();
-    let widest_key = keys.iter().map(|k| cols(k)).max().unwrap_or(0);
-    let aligned = pairs_align(widest_key, arg_indent, width);
+    let pk = PairKeys::new(&keys, arg_indent, width);
 
     let mut widest = arg_indent;
     for i in 0..lead {
@@ -1122,21 +1247,24 @@ fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize, width: usize) -> u
     for p in 0..pair_count {
         let ki = key_of(p);
         let vi = ki + 1;
-        let aligned_col = if aligned {
-            arg_indent + widest_key + 2
-        } else {
-            arg_indent + cols(&keys[p]) + 2
-        };
+        let aligned_col = pk.value_col(p);
         let sep = if p + 1 == pair_count && !has_tail {
             0
         } else {
             sep_len(g, vi)
         };
-        let col = pair_value_col(&g.args[vi], aligned_col, arg_indent, width, sep);
+        let col = pair_value_col(
+            &g.args[vi],
+            aligned_col,
+            arg_indent,
+            width,
+            sep,
+            key_line_width(&keys[p], arg_indent, sep_len(g, ki)),
+        );
         // A hanging value leaves its key alone on the line above, carrying
         // only the separator that follows it.
         if col < aligned_col {
-            widest = widest.max(arg_indent + cols(&keys[p]) + sep_len(g, ki));
+            widest = widest.max(key_line_width(&keys[p], arg_indent, sep_len(g, ki)));
         }
         widest = widest.max(min_items_width(&g.args[vi], col, width).with_sep(sep));
     }
@@ -1189,7 +1317,16 @@ fn min_items_width(items: &[Node], col: usize, width: usize) -> MinWidth {
 fn min_chunk_width(items: &[Node], col: usize, width: usize) -> MinWidth {
     let (inline, offs) = render_inline(items, false);
     let Some(gi) = items.iter().rposition(|n| matches!(n, Node::Group(_))) else {
-        return MinWidth::flat(col + cols(&inline));
+        // Nothing here can open out, so this run is emitted exactly as
+        // rendered — physical lines and all. A newline inside a string
+        // literal already put it on several, and reporting their total as
+        // one line is a width the formatter will never produce. Reachable
+        // from pair layout through `min_pairs_width`, where it rejected
+        // pair layouts whose widest emitted line fitted comfortably.
+        return MinWidth {
+            widest: emitted_widest(col, &inline),
+            last: emitted_last(col, &inline),
+        };
     };
     let Node::Group(g) = &items[gi] else {
         unreachable!("rposition matched a group")
@@ -1198,18 +1335,28 @@ fn min_chunk_width(items: &[Node], col: usize, width: usize) -> MinWidth {
     // `offs` and the rendered group length are byte offsets: slice with
     // them, then measure the slices in columns.
     let glen = render_group_inline(g, false).len();
-    let prefix = cols(&inline[..offs[gi]]);
-    let suffix = cols(&inline[offs[gi] + glen..]);
+    // Physical lines: a prefix carrying a newline inside a string literal
+    // does not push the group right by its whole span — the group opens
+    // after the prefix's *final* line, which may start at column zero. A
+    // suffix rides the closing line and may carry its own newlines away
+    // from it. `layout_items` derives the same two columns the same way.
+    let prefix_str = &inline[..offs[gi]];
+    let suffix_str = &inline[offs[gi] + glen..];
+    let prefix_end = emitted_last(col, prefix_str);
+    let pushed = prefix_end.saturating_sub(col);
     // The opening line is unavoidable; the body can at best be clamped —
     // to `col + prefix` capped at one indent step, exactly the cap
     // `layout_items` applies. Measuring the body a full step in from `col`
     // regardless of the prefix inflates the bound by INDENT at *every*
     // nesting level, so a deeply nested value reads far wider than the
     // layout it will actually get.
-    let body = min_group_width(g, col + prefix.min(INDENT), width);
-    let last = body.last + suffix;
+    let body = min_group_width(g, col + pushed.min(INDENT), width);
+    let last = emitted_last(body.last, suffix_str);
     MinWidth {
-        widest: (col + prefix + head).max(body.widest).max(last),
+        widest: emitted_widest(col, prefix_str)
+            .max(prefix_end + head)
+            .max(body.widest)
+            .max(emitted_widest(body.last, suffix_str)),
         last,
     }
 }
@@ -1237,25 +1384,34 @@ fn pair_lead(name_upper: &str) -> Option<usize> {
 
 /// Whether pair layout is usable for this break, or the group should take
 /// the plain per-argument layout instead. Pair layout renders each key
-/// inline and pins its value beside it, so two shapes it cannot handle
-/// send the group to the plain layout, where every piece can wrap:
+/// inline, so the one shape it cannot handle sends the group to the plain
+/// layout, where every piece can wrap: a key that overflows the width
+/// *and* would get narrower broken — a criteria range built from a call,
+/// say `INDIRECT(…)`.
 ///
-///   - a key that overflows the width *and* would get narrower broken —
-///     a criteria range built from a call, say `INDIRECT(…)`;
-///   - a (key, value) line that overflows while the plain layout fits —
-///     two long-but-unbreakable names that are fine on separate lines.
+/// A (key, value) that does not fit side by side used to be a second such
+/// shape, because pair layout pinned the two to one line. It no longer
+/// does — [`pair_value_col`] hangs the value on the line below — so the
+/// pairing survives a value too big to sit beside its key, and falling
+/// back is not needed to fit it.
 ///
 /// When neither layout can make the group fit — a lone `LET` binding name
 /// longer than the width — pair layout stays: falling back would tear the
 /// pair apart without fixing the overshoot, and width is a target, not a
-/// ceiling.
+/// ceiling. Hanging follows the same rule, in [`pair_value_col`].
 fn pair_layout_fits(g: &Group, lead: usize, arg_indent: usize, width: usize) -> bool {
     let n = g.args.len();
     let pair_count = (n - lead) / 2;
     let keys_inline = (0..pair_count).all(|p| {
         let key = &g.args[lead + p * 2];
-        let inline_end = arg_indent + cols(&render_inline(key, false).0);
-        inline_end + 2 <= width || min_items_width(key, arg_indent, width).widest >= inline_end
+        // Physical lines again: a key carrying a newline inside a string
+        // literal is not the width of its span, and the value's gap lands
+        // after its final line. `emitted_widest` is what breaking the key
+        // would have to beat to be worth doing.
+        let rendered = render_inline(key, false).0;
+        emitted_span(arg_indent, &rendered, 2) <= width
+            || min_items_width(key, arg_indent, width).widest
+                >= emitted_widest(arg_indent, &rendered)
     });
     if !keys_inline {
         return false;
@@ -1378,6 +1534,12 @@ fn layout_items(
     // one line, and only the *final* line carries what the caller appends.
     // Folding `pending` into the span charges a multi-line string literal's
     // whole width for a comma that lands after its last byte.
+    // Two questions here, and only one of them is "does it fit". The span
+    // asks whether this fragment is a single line at all: a formula
+    // carrying a newline inside a string literal is not, and collapsing the
+    // structure around such a string buries the nesting a reader needs —
+    // see `operator_chain_around_multiline_string_stays_inline`. `pending`
+    // is then charged against the final line, which is where it lands.
     if !force
         && !contains_authored_grouping(items)
         && start_col + cols(&inline) <= width
@@ -1456,8 +1618,11 @@ fn layout_items(
     // `=` column at top level); its body indents from `indent` (which does
     // not — `=` is a column, not indentation, and the close bracket must
     // stay on the indent grid).
-    let group_col = start_col + cols(&prefix);
-    let body = (indent + cols(&prefix)).min(indent + INDENT);
+    // Same two columns as `min_chunk_width`, derived the same way: the
+    // group opens where the prefix's final line ends, and how far that
+    // pushed us is measured from there, not from the prefix's whole span.
+    let group_col = emitted_last(start_col, &prefix);
+    let body = (indent + group_col.saturating_sub(start_col)).min(indent + INDENT);
     let mut lines = layout_group(g, group_col, body, width, force, cols(&suffix) + pending);
     lines[0] = format!("{prefix}{}", lines[0]);
     if !suffix.is_empty() {
@@ -1611,9 +1776,7 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
         .map(|p| render_inline(&g.args[key_of(p)], false).0)
         .collect();
 
-    let widest = keys.iter().map(|k| cols(k)).max().unwrap_or(0);
-    let aligned = pairs_align(widest, arg_indent, width);
-    let value_col = arg_indent + if aligned { widest + 2 } else { 0 };
+    let pk = PairKeys::new(&keys, arg_indent, width);
 
     // The separator that followed argument `i` in the source. Locales that
     // use `;` instead of `,` must round-trip untouched — substituting one
@@ -1647,23 +1810,24 @@ fn layout_pairs(g: &Group, open: &str, lead: usize, indent: usize, width: usize)
         let vi = ki + 1;
         let key = &keys[p];
         let key_sep = sep_after(ki);
-        let aligned_col = if aligned {
-            value_col
-        } else {
-            arg_indent + cols(key) + 2
-        };
+        let aligned_col = pk.value_col(p);
         let last = !has_tail && p + 1 == pair_count;
         let value_sep = if last { "" } else { sep_after(vi) };
-        let col = pair_value_col(&g.args[vi], aligned_col, arg_indent, width, cols(value_sep));
+        let col = pair_value_col(
+            &g.args[vi],
+            aligned_col,
+            arg_indent,
+            width,
+            cols(value_sep),
+            key_line_width(key, arg_indent, cols(key_sep)),
+        );
 
         let mut block = layout_items(&g.args[vi], col, col, width, false, cols(value_sep));
         if col < aligned_col {
             block[0] = format!("{}{}", ind(col), block[0]);
             block.insert(0, format!("{}{key}{key_sep}", ind(arg_indent)));
         } else {
-            let pad = col
-                .saturating_sub(arg_indent + cols(key) + cols(key_sep))
-                .max(1);
+            let pad = col.saturating_sub(pk.ends[p] + cols(key_sep)).max(1);
             block[0] = format!("{}{key}{key_sep}{}{}", ind(arg_indent), ind(pad), block[0]);
         }
         emit(&mut lines, block, &g.args[ki], value_sep);
