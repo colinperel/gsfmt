@@ -241,6 +241,39 @@ fn segments_golden_keeps_its_shape() {
     }
 }
 
+/// The gutter is sized by the keys whose values actually sit in it. A key
+/// whose value hangs never occupies that column, so letting it set the width
+/// charges every other binding for padding nobody uses — one long name shoved
+/// its neighbours eighteen columns right for nothing.
+#[test]
+fn a_hanging_key_does_not_set_the_gutter() {
+    let src = "=LET(aa,1,bb,2,aVeryLongBindingName,\
+SUM(alpha, beta, gamma, delta, epsilon, zeta, eta, theta, iota),aa)";
+    let out = fmt(src);
+    assert_eq!(
+        out,
+        "=LET(\n  aa, 1,\n  bb, 2,\n  aVeryLongBindingName,\n    \
+SUM(alpha, beta, gamma, delta, epsilon, zeta, eta, theta, iota),\n  aa\n)\n"
+    );
+
+    // The narrowing must not tempt the hung value back beside its key: the
+    // gutter it would return to is narrower than the key that hangs there,
+    // so it would be jammed against a name too wide for it and overflow.
+    for line in out.lines() {
+        assert!(
+            line.len() <= WIDTH,
+            "overflow ({} cols): {line}",
+            line.len()
+        );
+    }
+
+    // A key that *does* use the gutter still sets it.
+    assert_eq!(
+        fmt("=LET(aa,1,aVeryLongBindingName,2,aa)"),
+        "=LET(\n  aa,                   1,\n  aVeryLongBindingName, 2,\n  aa\n)\n"
+    );
+}
+
 // ───────────────────────────────────────────────────────────── property ──
 
 #[test]
@@ -1394,7 +1427,7 @@ fn a_block_fits_only_if_its_trailing_separator_fits_too() {
 fn an_unbreakable_value_hangs_when_that_is_what_makes_it_fit() {
     assert_eq!(
         fmt_w("=LET(shoulderPotentialFactor, 0.55, x, 1, x)", 30).unwrap(),
-        "=LET(\n  shoulderPotentialFactor,\n    0.55,\n  x,                       1,\n  x\n)\n"
+        "=LET(\n  shoulderPotentialFactor,\n    0.55,\n  x, 1,\n  x\n)\n"
     );
 
     // Hanging must buy the line it costs. It buys nothing when the key
@@ -1434,7 +1467,7 @@ fn an_unbreakable_value_hangs_when_that_is_what_makes_it_fit() {
     let out = fmt_w(multiline_key, 17).unwrap();
     assert_eq!(
         out,
-        "=SWITCH(\n  x,\n  \"aaaaaaaaaa\nbbbbbbbbbb\",\n    0.55,\n  \"z\",       1\n)\n"
+        "=SWITCH(\n  x,\n  \"aaaaaaaaaa\nbbbbbbbbbb\",\n    0.55,\n  \"z\", 1\n)\n"
     );
     for line in out.lines() {
         assert!(line.chars().count() <= 17, "overflow:\n{out}");
@@ -1518,7 +1551,7 @@ fn an_unbreakable_value_hangs_when_that_is_what_makes_it_fit() {
     let out = fmt_w("=LET(longkey,SUM(\"aaaa\nb\"),z,1,z)", 20).unwrap();
     assert_eq!(
         out,
-        "=LET(\n  longkey,\n    SUM(\"aaaa\nb\"),\n  z,       1,\n  z\n)\n"
+        "=LET(\n  longkey,\n    SUM(\"aaaa\nb\"),\n  z, 1,\n  z\n)\n"
     );
     for line in out.lines() {
         assert!(line.chars().count() <= 20, "overflow:\n{out}");

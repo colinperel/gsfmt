@@ -4,7 +4,7 @@
 //! `LAYOUT-IR-PLAN.md` for the plan to remove it.
 
 use crate::layout::core::{binary_op_positions, sep_len, trailing_cols};
-use crate::layout::pairs::{key_line_width, pair_lead, pair_value_col, PairKeys};
+use crate::layout::pairs::{key_line_width, pair_lead, PairKeys};
 use crate::layout::width::{cols, emitted_last, emitted_widest};
 use crate::parse::{Group, Node};
 use crate::render::{render_group_inline, render_inline};
@@ -38,7 +38,8 @@ impl MinWidth {
 ///
 /// `width` is not a budget to spend here; it is passed through because one
 /// layout choice — whether a pair's value hangs below its key, see
-/// [`pair_value_col`] — depends on it, and the bound has to model the
+/// [`crate::layout::pairs::pair_value_col`] — depends on it, and the bound
+/// has to model the
 /// layout the formatter will actually emit at *this* width.
 pub(crate) fn min_group_width(g: &Group, col: usize, width: usize) -> MinWidth {
     let head = g.head.as_ref().map_or(0, |h| cols(&h.text)) + cols(&g.open.text);
@@ -109,7 +110,7 @@ pub(crate) fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize, width: 
     let keys: Vec<String> = (0..pair_count)
         .map(|p| render_inline(&g.args[key_of(p)], false).0)
         .collect();
-    let pk = PairKeys::new(&keys, arg_indent, width);
+    let pk = PairKeys::new(g, lead, &keys, arg_indent, width);
 
     let mut widest = arg_indent;
     for i in 0..lead {
@@ -118,23 +119,18 @@ pub(crate) fn min_pairs_width(g: &Group, lead: usize, arg_indent: usize, width: 
     for p in 0..pair_count {
         let ki = key_of(p);
         let vi = ki + 1;
-        let aligned_col = pk.value_col(p);
         let sep = if p + 1 == pair_count && !has_tail {
             0
         } else {
             sep_len(g, vi)
         };
-        let col = pair_value_col(
-            &g.args[vi],
-            aligned_col,
-            arg_indent,
-            width,
-            sep,
-            key_line_width(&keys[p], arg_indent, sep_len(g, ki)),
-        );
+        // Read the decision rather than repeating it: `PairKeys` made it
+        // against the gutter it offered, and asking again here — against the
+        // narrowed one — is how the bound and the layout come to disagree.
+        let col = pk.value_col(p);
         // A hanging value leaves its key alone on the line above, carrying
         // only the separator that follows it.
-        if col < aligned_col {
+        if pk.hangs(p) {
             widest = widest.max(key_line_width(&keys[p], arg_indent, sep_len(g, ki)));
         }
         widest = widest.max(min_items_width(&g.args[vi], col, width).with_sep(sep));

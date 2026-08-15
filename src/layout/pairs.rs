@@ -28,28 +28,97 @@ use crate::{ALIGN_MAX, INDENT};
 /// twice the two copies have eventually disagreed.
 pub(crate) struct PairKeys {
     ends: Vec<usize>,
-    aligned: bool,
-    shared_col: usize,
+    cols: Vec<usize>,
+    hangs: Vec<bool>,
 }
 
 impl PairKeys {
-    pub(crate) fn new(keys: &[String], arg_indent: usize, width: usize) -> Self {
+    /// Decide, once, where every pair's value goes.
+    ///
+    /// Two passes, and the order matters.
+    ///
+    /// The first sizes the gutter from every key, because that is the column
+    /// each value is offered before anyone knows whether it will take it —
+    /// the hanging decisions have to be made against it.
+    ///
+    /// The second narrows the gutter to the keys that actually took it. A key
+    /// whose value hangs never occupies the gutter, so letting it set the
+    /// width charges every other binding for padding nobody uses: a single
+    /// long name pushed its neighbours eighteen columns right for nothing.
+    ///
+    /// Only the gutter narrows; who hangs is settled in pass one and never
+    /// revisited. Re-deciding against the narrower column would let a value
+    /// that just hung fit again — which widens the gutter, which hangs it
+    /// again. That oscillates. Values that stay are simply moved left, which
+    /// they were already measured to survive, since a narrower column is
+    /// strictly easier than the one they were offered.
+    pub(crate) fn new(
+        g: &Group,
+        lead: usize,
+        keys: &[String],
+        arg_indent: usize,
+        width: usize,
+    ) -> Self {
+        let n = g.args.len();
+        let pair_count = keys.len();
+        let has_tail = (n - lead) % 2 == 1;
         let ends: Vec<usize> = keys.iter().map(|k| emitted_last(arg_indent, k)).collect();
+
         let widest = ends.iter().copied().max().unwrap_or(arg_indent);
         let aligned = pairs_align(widest.saturating_sub(arg_indent), arg_indent, width);
-        Self {
-            ends,
-            aligned,
-            shared_col: widest + 2,
+        let offered = |p: usize| if aligned { widest + 2 } else { ends[p] + 2 };
+
+        let mut cols = Vec::with_capacity(pair_count);
+        let mut hangs = Vec::with_capacity(pair_count);
+        for p in 0..pair_count {
+            let ki = lead + p * 2;
+            let vi = ki + 1;
+            let sep = if p + 1 == pair_count && !has_tail {
+                0
+            } else {
+                sep_len(g, vi)
+            };
+            let col = pair_value_col(
+                &g.args[vi],
+                offered(p),
+                arg_indent,
+                width,
+                sep,
+                key_line_width(&keys[p], arg_indent, sep_len(g, ki)),
+            );
+            hangs.push(col < offered(p));
+            cols.push(col);
         }
+
+        // Narrowing only applies to a shared gutter; without one each value
+        // already sits against its own key.
+        if aligned {
+            let used = (0..pair_count)
+                .filter(|&p| !hangs[p])
+                .map(|p| ends[p])
+                .max();
+            if let Some(used) = used {
+                for p in 0..pair_count {
+                    if !hangs[p] {
+                        cols[p] = used + 2;
+                    }
+                }
+            }
+        }
+
+        Self { ends, cols, hangs }
     }
 
     pub(crate) fn value_col(&self, p: usize) -> usize {
-        if self.aligned {
-            self.shared_col
-        } else {
-            self.ends[p] + 2
-        }
+        self.cols[p]
+    }
+
+    pub(crate) fn hangs(&self, p: usize) -> bool {
+        self.hangs[p]
+    }
+
+    pub(crate) fn end(&self, p: usize) -> usize {
+        self.ends[p]
     }
 }
 
@@ -328,7 +397,7 @@ pub(crate) fn layout_pairs(
         .map(|p| render_inline(&g.args[key_of(p)], false).0)
         .collect();
 
-    let pk = PairKeys::new(&keys, arg_indent, width);
+    let pk = PairKeys::new(g, lead, &keys, arg_indent, width);
 
     // The separator that followed argument `i` in the source. Locales that
     // use `;` instead of `,` must round-trip untouched — substituting one
@@ -362,24 +431,19 @@ pub(crate) fn layout_pairs(
         let vi = ki + 1;
         let key = &keys[p];
         let key_sep = sep_after(ki);
-        let aligned_col = pk.value_col(p);
         let last = !has_tail && p + 1 == pair_count;
         let value_sep = if last { "" } else { sep_after(vi) };
-        let col = pair_value_col(
-            &g.args[vi],
-            aligned_col,
-            arg_indent,
-            width,
-            cols(value_sep),
-            key_line_width(key, arg_indent, cols(key_sep)),
-        );
+        // Read the decision rather than repeating it. `PairKeys` made it
+        // against the gutter it offered; asking again here, against the
+        // narrowed one, is how the renderer and the bound come to disagree.
+        let col = pk.value_col(p);
 
         let mut block = layout_items(&g.args[vi], col, col, width, false, cols(value_sep));
-        if col < aligned_col {
+        if pk.hangs(p) {
             block[0] = format!("{}{}", ind(col), block[0]);
             block.insert(0, format!("{}{key}{key_sep}", ind(arg_indent)));
         } else {
-            let pad = col.saturating_sub(pk.ends[p] + cols(key_sep)).max(1);
+            let pad = col.saturating_sub(pk.end(p) + cols(key_sep)).max(1);
             block[0] = format!("{}{key}{key_sep}{}{}", ind(arg_indent), ind(pad), block[0]);
         }
         emit(&mut lines, block, &g.args[ki], value_sep);

@@ -281,7 +281,7 @@
               windowUnits($DL$2, $DL$3 + 1, rowStart, rowEnd)
                 + windowUnits($DM$2, $DM$3 + 1, rowStart, rowEnd),
 
-            unusedUnits,    MAX(0, availableUnits - usedUnits),
+            unusedUnits, MAX(0, availableUnits - usedUnits),
 
             unusedUnits * rate * segmentBWeightingFactor
           )
@@ -358,7 +358,7 @@
               windowUnits($DQ$2, $DQ$3 + 1, rowStart, rowEnd)
                 + windowUnits($DR$2, $DR$3 + 1, rowStart, rowEnd),
 
-            unusedUnits,    MAX(0, availableUnits - usedUnits),
+            unusedUnits, MAX(0, availableUnits - usedUnits),
 
             unusedUnits * rate * segmentCWeightFactor
           )
