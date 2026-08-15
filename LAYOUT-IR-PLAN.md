@@ -67,14 +67,14 @@ place here.
 | `Group` | the unit of fits-or-breaks |
 | `Indent` | one nesting step |
 | `IfFlat` | the pair gutter — padding that exists only while the pair is flat |
-| `BestFitting{variants, mode}` | pair layout versus the plain per-argument layout — the mode is load-bearing, see decision 6 |
+| `BestFitting{variants, mode, fallback}` | pair layout versus the plain per-argument layout — mode *and* fallback are load-bearing, see decision 6 |
 
 ## Mapping
 
 | gsfmt today | becomes |
 |---|---|
 | `min_group_width`, `min_items_width`, `min_chunk_width`, `min_pairs_width`, `MinWidth` — 206 lines | deleted; `fits` walks the print stream |
-| `pair_layout_fits` strategy choice | `BestFitting{[pairs, plain, pairs]}`, `AllLines` |
+| `pair_layout_fits` strategy choice | `BestFitting{[pairs, plain], AllLines, fallback: 0}` |
 | `pairs_align`, `PairKeys`, the gutter | `IfFlat(spaces(pad))`, the pad computed once before building the IR |
 | `pair_value_col` / `stays_inline` | a `Group` around the value; it breaks or it does not |
 | `always_breaks` (LET) | `Line(Hard)` inside the group |
@@ -107,12 +107,12 @@ there is nothing to thread and nothing to forget to thread.
 
 These are real choices, not implementation detail. Settle them before step 3.
 
-1. **`BestFitting` falls back to the *most expanded* variant when none fit.**
-   gsfmt's current rule is the opposite: when neither pairs nor plain fit,
-   pairs stay, because "falling back would tear the pair apart without fixing
-   the overshoot". Adopting Ruff's convention changes that, and it is exactly
-   the case that broke the first attempt. Either order the variants to suit,
-   or keep gsfmt's rule and document the divergence.
+1. **The fallback when nothing fits.** gsfmt's rule is that pairs stay,
+   because "falling back would tear the pair apart without fixing the
+   overshoot", and it is the case that broke the first attempt at this
+   rewrite. Ruff's contract is the opposite — the last variant wins,
+   unmeasured. See decision 6 for how gsfmt expresses its rule against that
+   contract; ordering alone cannot.
 
 2. **One text element, not Ruff's two.** Ruff splits `Text` (owned) from
    `SourceCodeSlice` (borrowed) as a memory optimisation, and its
@@ -146,10 +146,28 @@ These are real choices, not implementation detail. Settle them before step 3.
    Reversing to `[plain, pairs]` breaks the ordinary prefer-pairs case
    instead. Ordering cannot express it with two.
 
-   `[pairs, plain, pairs]` does, exactly: pairs if pairs fit, else plain if
-   plain fits, else pairs unmeasured — which is the current rule stated as
-   an ordered list. The repetition looks odd and is idiomatic; it is how the
-   unconditional-last-variant contract is used.
+   `[pairs, plain, pairs]` does express it: pairs if pairs fit, else plain
+   if plain fits, else pairs unmeasured. But taken literally it is a trap.
+   With owned recursive documents the pairs tree is materialised twice at
+   every pair group, and a pair value that is itself a `LET` repeats that
+   inside its own variants — construction becomes exponential in nesting
+   depth, on the same shape `pair_nesting_at_the_cap_stays_fast` exists to
+   protect, and it happens before `fits` ever runs.
+
+   Ruff's answer is `Interned` (`Rc<[FormatElement]>`), which exists
+   precisely so repeated `BestFitting` content is shared rather than cloned.
+   gsfmt can do better than adopt the idiom *and* the machinery it needs:
+   carry the fallback as an index instead.
+
+       BestFitting { variants: Vec<Doc>, fallback: usize }
+
+   with `[pairs, plain]` and `fallback: 0`. No repetition, no interning, no
+   `Rc`, and the policy reads as what it is — prefer pairs, take plain if it
+   fits, otherwise variant 0. The divergence from Ruff is deliberate and
+   confined to one field.
+
+   Either way, gate IR *construction* against the depth-99 shape, not just
+   printing: this is a cost that lands before any measurement.
 
    On the mode: Ruff defaults to `BestFittingMode::FirstLine`,
    where a variant is chosen if the content up to its *first* line break
@@ -183,8 +201,8 @@ rewrite of *how* the layout is decided, not of what it produces.
 2. Build the IR for the shapes with no pair layout — calls, arrays, operator
    chains, blank arguments. Print through the new printer behind a flag.
    Gate: `gnarly.gsfx` byte-identical.
-3. Pair layout as `BestFitting{[pairs, plain, pairs]}` in `AllLines` mode,
-   plus the `IfFlat` gutter. Gate in this order, because each catches a
+3. Pair layout as `BestFitting{[pairs, plain], AllLines, fallback: 0}`, plus
+   the `IfFlat` gutter. Gate in this order, because each catches a
    different half of decision 6:
    `pair_layout_yields_to_breakable_oversized_keys` first — its `SUMIFS`
    case fails on a wrong *mode* (`FirstLine` never reaches the oversized
@@ -203,11 +221,19 @@ Steps 1–2 are additive and safe. Step 3 is where output can move.
 
 ## What not to copy from Ruff
 
-- **Its scale.** Ruff's element set, interning, `fill`, line suffixes and
-  verbatim handling exist for Python. Take the subset above.
+- **Its scale.** Ruff's element set, `fill`, line suffixes and verbatim
+  handling exist for Python. Take the subset above.
+- **Interning.** `Interned`/`Rc<[FormatElement]>` earns its place in Ruff
+  because repeated `BestFitting` content is common there. gsfmt has exactly
+  one such use, and decision 6 removes it with a fallback index instead. If
+  a second use appears, revisit — sharing is the right answer at that point,
+  not a third copy.
 - **Its AST orientation.** Ruff formats a parsed AST and normalises literals.
   gsfmt's whole thesis is that a formatter must not — see the module header
-  on why both mature formula parsers were rejected. Leaves stay raw slices.
+  on why both mature formula parsers were rejected. Leaf *text* is carried
+  through byte-for-byte (in an owned `Text`, per decision 2, since gsfmt's
+  tokens already own their strings); what must not be copied is the
+  normalisation.
 - **`unicode_width`.** Ruff depends on it. gsfmt is deliberately
   zero-dependency and approximates with `cols`; keep that, and keep the
   comment explaining the trade.
