@@ -261,9 +261,9 @@ SUM(alpha, beta, gamma, delta, epsilon, zeta, eta, theta, iota),\n  aa\n)\n"
     // so it would be jammed against a name too wide for it and overflow.
     for line in out.lines() {
         assert!(
-            line.len() <= WIDTH,
+            line.chars().count() <= WIDTH,
             "overflow ({} cols): {line}",
-            line.len()
+            line.chars().count()
         );
     }
 
