@@ -274,6 +274,75 @@ SUM(alpha, beta, gamma, delta, epsilon, zeta, eta, theta, iota),\n  aa\n)\n"
     );
 }
 
+/// Only a suffix's first line rides the closing line of the group before it.
+///
+/// A `QUERY` whose SELECT text is interleaved with `TEXT(…)` calls ends with
+/// hundreds of characters of embedded query after the last call — but they
+/// start on their own lines. Charging that whole span to the group told it it
+/// had no room, so it opened out while every physical line already fit: two
+/// of three identical `TEXT(…)` calls stayed inline and the third did not.
+#[test]
+fn only_a_suffixs_first_line_rides_the_group_it_follows() {
+    let query = concat!(
+        "\"select\n",
+        "         month(Col1)\n",
+        "       where Col1 >= date '\" & TEXT(firstMonth, \"yyyy-mm-dd\") & \"'\n",
+        "         and Col3 <= date '\" & TEXT(cutoff, \"yyyy-mm-dd\") & \"'\n",
+        "       group by month(Col1)\n",
+        "       label\n",
+        "         month(Col1) ''\""
+    );
+    let out = fmt(&format!("=LET(summary, QUERY(data, {query}, 0), summary)"));
+
+    // Both calls are the same shape and both fit; neither may open.
+    assert_eq!(
+        out.matches("TEXT(firstMonth, \"yyyy-mm-dd\")").count(),
+        1,
+        "the first TEXT call should stay inline:\n{out}"
+    );
+    assert_eq!(
+        out.matches("TEXT(cutoff, \"yyyy-mm-dd\")").count(),
+        1,
+        "the last TEXT call should stay inline too — it is the one the \
+         suffix's span used to push open:\n{out}"
+    );
+    for line in out.lines() {
+        assert!(
+            line.chars().count() <= WIDTH,
+            "overflow ({} cols): {line}",
+            line.chars().count()
+        );
+    }
+}
+
+/// The pair-layout predictor is charged the same suffix as the renderer.
+///
+/// `will_expand` asks whether `layout_items` will open a value's trailing
+/// group. Both sides have to measure what follows that group the same way,
+/// and when only the renderer was taught to charge just the suffix's first
+/// line, the predictor kept charging the whole span — so it predicted an
+/// expansion that would not happen and hung a value that fits beside its
+/// key.
+#[test]
+fn the_predictor_and_the_renderer_charge_the_same_suffix() {
+    let tail = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let out = fmt(&format!(
+        "=LET(summary, TEXT(cutoff, \"yyyy-mm-dd\") & \"x\n{tail}\", summary)"
+    ));
+    assert_eq!(
+        out,
+        format!("=LET(\n  summary, TEXT(cutoff, \"yyyy-mm-dd\") & \"x\n{tail}\",\n  summary\n)\n"),
+        "the value fits beside its key on every physical line"
+    );
+    for line in out.lines() {
+        assert!(
+            line.chars().count() <= WIDTH,
+            "overflow ({} cols): {line}",
+            line.chars().count()
+        );
+    }
+}
+
 // ───────────────────────────────────────────────────────────── property ──
 
 #[test]

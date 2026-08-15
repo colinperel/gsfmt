@@ -225,13 +225,39 @@ pub(crate) fn layout_items(
     // pushed us is measured from there, not from the prefix's whole span.
     let group_col = emitted_last(start_col, &prefix);
     let body = (indent + group_col.saturating_sub(start_col)).min(indent + INDENT);
-    let mut lines = layout_group(g, group_col, body, width, force, cols(&suffix) + pending);
+    let mut lines = layout_group(
+        g,
+        group_col,
+        body,
+        width,
+        force,
+        suffix_charge(&suffix, pending),
+    );
     lines[0] = format!("{prefix}{}", lines[0]);
     if !suffix.is_empty() {
         let last = lines.len() - 1;
         lines[last].push_str(&suffix);
     }
     lines
+}
+
+/// Columns a group is charged for whatever follows it on the line it closes
+/// on.
+///
+/// Only the suffix's first line rides that line: past its first newline the
+/// suffix starts lines of its own, whose width has nothing to do with where
+/// the group began. And once the suffix breaks, whatever the *caller*
+/// appends lands on the suffix's last line rather than on the group, so
+/// `pending` stops being the group's problem too.
+///
+/// Shared because the renderer and the pair-layout predictor both need it,
+/// and a second copy is how they come to disagree — which is exactly what
+/// happened when only the renderer was fixed.
+pub(crate) fn suffix_charge(suffix: &str, pending: usize) -> usize {
+    match suffix.split_once('\n') {
+        None => cols(suffix) + pending,
+        Some((head, _)) => cols(head),
+    }
 }
 
 /// Whether [`layout_group`] will return this group whole, on the line it
