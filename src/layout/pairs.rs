@@ -2,10 +2,12 @@
 //! and the choice between pairs and the plain per-argument layout.
 
 use crate::layout::bound::{min_items_width, min_pairs_width};
-use crate::layout::core::{binary_op_positions, contains_authored_grouping, layout_items, sep_len};
+use crate::layout::core::{
+    binary_op_positions, contains_authored_grouping, group_stays_whole, layout_items, sep_len,
+};
 use crate::layout::width::{cols, emitted_last, emitted_span, emitted_widest, ind};
 use crate::parse::{first_token, Group, Node};
-use crate::render::render_inline;
+use crate::render::{render_group_inline, render_inline};
 use crate::{ALIGN_MAX, INDENT};
 
 /// Where a pair-laid group's keys end and its values begin.
@@ -109,7 +111,8 @@ pub(crate) fn stays_inline(
     }
     let renderer_keeps_it =
         col + cols(inline) <= width && emitted_last(col, inline) + pending <= width;
-    renderer_keeps_it || (!has_openable_group(value) && emitted_span(col, inline, pending) <= width)
+    renderer_keeps_it
+        || (!will_expand(value, col, width, pending) && emitted_span(col, inline, pending) <= width)
 }
 
 /// Where a pair's value block starts: beside its key at `aligned_col`, or
@@ -197,6 +200,37 @@ pub(crate) fn has_openable_group(items: &[Node]) -> bool {
     items
         .iter()
         .any(|n| matches!(n, Node::Group(g) if !g.is_empty_call()))
+}
+
+/// Whether `layout_items` will expand this run once its inline shortcut has
+/// declined — the question [`stays_inline`] needs, and one the shape of the
+/// run cannot answer.
+///
+/// Two things had to stop being guessed here. Operators do not imply
+/// expansion: a chain breaks only under real width pressure measured on
+/// physical lines, so one whose lines already fit is emitted as rendered.
+/// Nor does holding a *group* — `layout_group` returns a group whole
+/// whenever it fits at the column its prefix leaves it at, and always for
+/// an empty call. Reading "holds a group" as "will expand" hung values the
+/// renderer would have kept beside their key.
+///
+/// So ask the renderer's own question, through the function it uses:
+/// [`group_stays_whole`]. There is no second copy of the condition to
+/// drift, which is how every other predicate in this module went wrong.
+pub(crate) fn will_expand(items: &[Node], col: usize, width: usize, pending: usize) -> bool {
+    let Some(gi) = items.iter().rposition(|n| matches!(n, Node::Group(_))) else {
+        return false;
+    };
+    let Node::Group(g) = &items[gi] else {
+        unreachable!("rposition matched a group")
+    };
+    let (inline, offs) = render_inline(items, false);
+    let glen = render_group_inline(g, false).len();
+    // The group opens where the prefix's final line ends, and whatever
+    // follows rides its closing line — the columns `layout_items` uses.
+    let group_col = emitted_last(col, &inline[..offs[gi]]);
+    let suffix = cols(&inline[offs[gi] + glen..]);
+    !group_stays_whole(g, group_col, width, false, suffix + pending)
 }
 
 /// `LET`/`IFS`/`SWITCH` bind (key, value) pairs that read best one pair per
