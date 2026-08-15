@@ -4,8 +4,16 @@ Scoping document, not executed. Supersedes `BOUND-REFACTOR-PLAN.md`, which
 proposed a different fix for the same problem and was tried and abandoned —
 read its outcome section before reviving anything from it.
 
-Self-contained: an implementing agent needs this file, the repo, and the
-reference implementation named below.
+Self-contained with one exception, called out because it matters for the
+gates below: the 760-line production formula referenced throughout is the
+one that started this work and is **not in the repository**. It is a user's
+own spreadsheet logic, so committing it is their call, not the plan's. Until
+it is either committed as an anonymised fixture or replaced, treat every gate
+that names it as a local check an implementer cannot reproduce from the repo
+alone, and rely on `tests/data/` for the reproducible ones.
+
+Otherwise self-contained: an implementing agent needs this file, the repo, and
+the reference implementation named below.
 
 ## The problem, stated properly
 
@@ -49,7 +57,8 @@ place here.
 | element | purpose in gsfmt |
 |---|---|
 | `Token(&'static str)` | punctuation the formatter owns: `(`, `)`, `,` |
-| `SourceSlice(range)` | every leaf, byte-for-byte from the source |
+| `SourceSlice(range)` | every leaf gsfmt copies verbatim |
+| `Text(String)` | the two leaves gsfmt rewrites — see decision 2 |
 | `Space` | the one between an operator and its operand |
 | `Line(Soft)` | break only if the enclosing group breaks |
 | `Line(SoftOrSpace)` | a space when flat, a break when the group breaks |
@@ -59,14 +68,14 @@ place here.
 | `Group` | the unit of fits-or-breaks |
 | `Indent` | one nesting step |
 | `IfFlat` | the pair gutter — padding that exists only while the pair is flat |
-| `BestFitting{variants}` | pair layout versus the plain per-argument layout |
+| `BestFitting{variants, mode}` | pair layout versus the plain per-argument layout — the mode is load-bearing, see decision 6 |
 
 ## Mapping
 
 | gsfmt today | becomes |
 |---|---|
 | `min_group_width`, `min_items_width`, `min_chunk_width`, `min_pairs_width`, `MinWidth` — 206 lines | deleted; `fits` walks the print stream |
-| `pair_layout_fits` strategy choice | `BestFitting{[pairs, plain]}` |
+| `pair_layout_fits` strategy choice | `BestFitting{[pairs, plain]}`, `AllLines` |
 | `pairs_align`, `PairKeys`, the gutter | `IfFlat(spaces(pad))`, the pad computed once before building the IR |
 | `pair_value_col` / `stays_inline` | a `Group` around the value; it breaks or it does not |
 | `always_breaks` (LET) | `Line(Hard)` inside the group |
@@ -106,12 +115,18 @@ These are real choices, not implementation detail. Settle them before step 3.
    the case that broke the first attempt. Either order the variants to suit,
    or keep gsfmt's rule and document the divergence.
 
-2. **Byte preservation.** gsfmt's contract is that only whitespace between
-   tokens may change. Ruff formats an AST and does not make that promise, so
-   every leaf must be a source slice in the IR and no builder may normalise
-   it. Ruff's `text()` asserts its input has no newlines — gsfmt's string
-   literals do, so gsfmt needs the `SourceSlice`/`Multiline` path, not
-   `text()`.
+2. **Byte preservation, and its two exceptions.** gsfmt's contract is that
+   only whitespace between tokens may change — *with two sanctioned
+   rewrites*, both of which mutate a leaf today:
+   `normalize_separators` sets `sep.text = ","` in the dot locale, and
+   `uppercase_function_heads` sets `h.text = h.text.to_uppercase()` under
+   `--uppercase`. So "every leaf is a source slice" is wrong as stated: the
+   IR needs an owned-text element alongside `SourceSlice`, and the builder
+   decides which a given leaf gets. Both rewrites need their own migration
+   gate — `comma_locale.gsfx` for the first, the uppercase tests for the
+   second. Separately, Ruff's `text()` asserts its input has no newlines;
+   gsfmt's string literals do, so gsfmt's owned-text element must carry the
+   `Multiline` width state rather than reuse Ruff's assertion.
 
 3. **Blank arguments.** `IF(a,,b)` holds an argument with zero tokens and
    must round-trip. It is an empty entry between two separators; confirm that
@@ -120,6 +135,21 @@ These are real choices, not implementation detail. Settle them before step 3.
 4. **Comma-locale separators.** `;` must round-trip untouched under
    `Decimal::Comma`. Separators are `Token`s owned by the builder, so the
    builder has to read the locale rather than hard-code `,`.
+
+6. **`BestFitting` mode.** Ruff defaults to `BestFittingMode::FirstLine`,
+   where a variant is chosen if the content up to its *first* line break
+   fits. That is wrong for gsfmt and would silently disable the fallback:
+   the pairs variant opens with `LET(` or `SUMIFS(`, which always fits, so
+   `FirstLine` selects pairs before an oversized key or value is ever
+   measured — and `pair_layout_yields_to_breakable_oversized_keys` would
+   fail. gsfmt needs `AllLines`.
+
+   `AllLines` carries its own catch worth designing around: a variant does
+   not fit if it contains a hard line break *outside* a group in expanded
+   mode. gsfmt's `LET` always breaks, which is a hard break, so the pairs
+   variant must place that break inside an expanded group or `AllLines`
+   will reject the variant outright. Prove this with a test before relying
+   on it.
 
 5. **The multiline rule.** Ruff never measures a token carrying a newline;
    `will_break` is set and the enclosing group expands. That does *not*
@@ -138,13 +168,16 @@ rewrite of *how* the layout is decided, not of what it produces.
 2. Build the IR for the shapes with no pair layout — calls, arrays, operator
    chains, blank arguments. Print through the new printer behind a flag.
    Gate: `gnarly.gsfx` byte-identical.
-3. Pair layout as `BestFitting{[pairs, plain]}` plus the `IfFlat` gutter. Gate:
-   `monthly.gsfx` and `payperiods.gsfx` byte-identical, and the reporter's
-   760-line formula unchanged at width 82.
+3. Pair layout as `BestFitting{[pairs, plain]}` in `AllLines` mode, plus the
+   `IfFlat` gutter. Gate: `pair_layout_yields_to_breakable_oversized_keys`
+   first — it is the test that catches a wrong mode — then `monthly.gsfx`
+   and `payperiods.gsfx` byte-identical. (Locally, also the 760-line formula
+   at width 82; see the note at the top.)
 4. Delete the `min_*` family and the old `layout_*` family. Re-point the
    `the_width_bound_*` tests at emitted geometry; any that only made sense
    against the deleted bound should be said so, not deleted quietly.
-5. Width matrix 20–120 over the fixtures and the reporter's formula, diffing
+5. Width matrix 20–120 over `tests/data/`, and over the 760-line formula if
+   it is available locally, diffing
    against today. Every difference explained before it is accepted.
 
 Steps 1–2 are additive and safe. Step 3 is where output can move.
@@ -174,7 +207,8 @@ Steps 1–2 are additive and safe. Step 3 is where output can move.
   decide those one at a time, not in bulk.
 - **Performance.** Should improve: bounded lookahead replaces a full bound
   traversal per group. Confirm against the depth-99 chain (896 ms today,
-  10s ceiling) and the 760-line formula (8.0 ms) at every step.
+  10s ceiling) and, where available, the 760-line formula (8.0 ms) at every
+  step.
 - **The temptation to half-migrate.** Two engines behind a flag is the same
   two-models problem in a new costume. Steps 1–3 may land separately; step 4
   must not be deferred indefinitely.

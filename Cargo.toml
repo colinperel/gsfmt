@@ -11,7 +11,7 @@ keywords = ["google-sheets", "formatter", "formula", "spreadsheet"]
 categories = ["command-line-utilities", "text-processing"]
 # Planning documents are historical artifacts and .github is CI plumbing;
 # neither belongs in the published crate.
-exclude = ["/.github", "/PLAN.md", "/ISSUE-12-PLAN.md"]
+exclude = ["/.github", "/*-PLAN.md", "/PLAN.md"]
 
 [dependencies]
 
