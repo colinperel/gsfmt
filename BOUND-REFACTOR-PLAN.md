@@ -28,7 +28,7 @@ decision on a width nothing will ever emit.
 The twelve, by root cause:
 
 - **#19** — `min_chunk_width` measured a group's body one indent step deeper
-  than `layout_items` emits it, compounding per nesting level. A 60-binding
+  than `layout_items` emits it, compounding per nesting level. A 68-binding
   `LET` measured 83 against a width of 82, all of it phantom, and lost pair
   layout entirely.
 - **#20** — `ALIGN_MAX` gated alignment without reference to the window;
