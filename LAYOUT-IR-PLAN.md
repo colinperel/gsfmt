@@ -58,7 +58,7 @@ place here.
 | `ExpandParent` | propagate a forced break outward |
 | `Group` | the unit of fits-or-breaks |
 | `Indent` | one nesting step |
-| `Align(n)` | the pair gutter — indent by an exact space count |
+| `IfFlat` | the pair gutter — padding that exists only while the pair is flat |
 | `BestFitting{variants}` | pair layout versus the plain per-argument layout |
 
 ## Mapping
@@ -67,7 +67,7 @@ place here.
 |---|---|
 | `min_group_width`, `min_items_width`, `min_chunk_width`, `min_pairs_width`, `MinWidth` — 206 lines | deleted; `fits` walks the print stream |
 | `pair_layout_fits` strategy choice | `BestFitting{[pairs, plain]}` |
-| `pairs_align`, `PairKeys`, the gutter | `Align(widest_key + 2)`, computed once before building the IR |
+| `pairs_align`, `PairKeys`, the gutter | `IfFlat(spaces(pad))`, the pad computed once before building the IR |
 | `pair_value_col` / `stays_inline` | a `Group` around the value; it breaks or it does not |
 | `always_breaks` (LET) | `Line(Hard)` inside the group |
 | `has_authored_grouping`, `group_forces_break` | `Line(Empty)` + `ExpandParent` |
@@ -124,10 +124,11 @@ These are real choices, not implementation detail. Settle them before step 3.
    `Decimal::Comma`. Separators are `Token`s owned by the builder, so the
    builder has to read the locale rather than hard-code `,`.
 
-5. **Alignment is gsfmt's divergence from Prettier and it stays.** Prettier
-   refuses column alignment because it assumes a monospace font; `.gsfx`
-   files and the Sheets formula editor are monospace, so the objection does
-   not apply. Ruff's `Align(NonZeroU8)` supports it directly.
+5. **The multiline rule.** Ruff never measures a token carrying a newline;
+   `will_break` is set and the enclosing group expands. That does *not*
+   reproduce gsfmt's output — see the spike below. Decide deliberately:
+   adopt Ruff's rule and accept the style change, or keep physical-line
+   measurement, which is implementable in `fits` alone.
 
 ## Migration
 
@@ -180,3 +181,58 @@ Steps 1–2 are additive and safe. Step 3 is where output can move.
 - **The temptation to half-migrate.** Two engines behind a flag is the same
   two-models problem in a new costume. Steps 1–3 may land separately; step 4
   must not be deferred indefinitely.
+
+## Spike result
+
+A standalone printer — elements, a `fits` with bounded lookahead, and the
+document built by hand — was written and run against real gsfmt output before
+touching `src/lib.rs`. Roughly 130 lines for the printer.
+
+**Reproduced byte-for-byte:**
+
+- lines 3-18 of `tests/data/monthly.gsfx`: the aligned gutter, both authored
+  blank lines, the hanging `shipments` value, and the nested `FILTER`/`HSTACK`
+  groups
+- an operator chain breaking with its operators leading the continuation
+  lines
+
+**Did not reproduce**, and this is the important one:
+
+    =LET(longkey, "aaaa\nb" & c, z, 1, z)      at width 23
+
+    gsfmt today          spike (Ruff's rule)
+      longkey, "aaaa       longkey,
+    b" & c,                  "aaaa
+                           b"
+                             &
+                             c
+
+gsfmt keeps a value carrying a newline *beside* its key, because it measures
+that value's physical lines (16 and 7, both inside 23). Ruff sets
+`will_break` on any multiline token, so the enclosing group expands
+unconditionally.
+
+### Two claims above were wrong
+
+**`Align` is not needed, and would be harmful.** The gutter is padding on the
+pair's *first* line only — `IfFlat(spaces(pad))`. When the pair breaks there
+is no gutter, because the value hangs one indent step in. `Align` would
+anchor a broken value's continuation lines at the gutter column, which is
+exactly the skinny-tower shape PR #19 removed. Having the primitive would
+make the tower expressible again, so gsfmt should not have it. Corrected in
+the tables above.
+
+**"Five findings become unwriteable" is too strong.** That holds only under
+Ruff's multiline rule, which changes output. Keeping today's behaviour means
+`fits` measures multiline text by physical lines — the same arithmetic that
+produced those five findings. The difference, and it is still the whole
+point, is that there is exactly *one* `fits` rather than five hand-kept
+copies. The class collapses from five sites to one, not to zero.
+
+### Still untested
+
+`BestFitting` and the pairs-versus-plain fallback; blank arguments
+(`IF(a,,b)`); comma-locale separators; the packed opening line
+(`SUMIFS(qC,` with leading simple arguments); and performance against the
+depth-99 chain. The fallback case is the one most likely to hold another
+surprise, since it is what broke the previous plan.
