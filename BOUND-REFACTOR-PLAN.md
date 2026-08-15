@@ -1,7 +1,12 @@
 # Making the width bound a dry run of the renderer
 
-Scoping document, not yet executed. Self-contained: an implementing agent
-needs only this file plus the repo.
+> **Tried 2026-08-15 and abandoned.** The approach below was implemented far
+> enough to measure and does not work — for two independent reasons, both
+> recorded in "What the attempt found". The problem it addresses is real and
+> still open; this design is not the answer. Read the outcome section before
+> reviving any of it.
+
+Self-contained: an implementing agent needs only this file plus the repo.
 
 ## The problem
 
@@ -161,3 +166,73 @@ Rewriting the layout algorithm itself. The renderer's decisions are sound —
 every defect in this series was the *bound* disagreeing with them, never the
 renderer being wrong. This removes the second opinion, it does not rethink
 the first.
+
+## What the attempt found
+
+Implemented through step 3 on a branch, measured, and reverted. Two findings,
+either of which sinks it.
+
+### 1. The trial does not subsume `keys_inline`
+
+The plan claims the `keys_inline` pre-check "disappears: it approximates 'a
+breakable oversized key would get narrower broken', which the trial answers
+directly". It does not.
+
+When *neither* layout fits, the trial has to pick one, and the two documented
+cases want opposite answers:
+
+- a lone `LET` binding name longer than the width — pairs must stay, because
+  "falling back would tear the pair apart without fixing the overshoot"
+  (`pair_layout_fits`); plain is *narrower* here, so "pick the narrower" is
+  wrong;
+- a breakable oversized key such as `INDIRECT("A" & someLongNamedCell)` —
+  plain must win, because the key would get genuinely narrower broken; "keep
+  pairs" is wrong, and produced a 44-column line against a 24-column window,
+  failing `pair_layout_yields_to_breakable_oversized_keys`.
+
+Widths alone cannot separate those. The distinguishing fact — *is the key
+itself breakable* — is what `keys_inline` encodes, and it needs
+`min_items_width` to answer. Keeping the pre-check keeps `min_items_width`,
+which reaches `min_chunk_width`, `min_group_width` and `min_pairs_width`.
+Nothing gets deleted.
+
+### 2. The fallback is a second full layout, which the bound never was
+
+Measured, release, 20 runs each:
+
+| variant | depth-99 `LET` chain | 760-line formula | tests | bound deleted |
+|---|---|---|---|---|
+| baseline (`ebdee17`) | 896 ms | 8.0 ms | pass | — |
+| step 1, cache only | 909 ms | 8.2 ms | pass | none |
+| step 3, no pre-check | 1813 ms | 7.3 ms | 1 fail | all 206 lines |
+| step 3 + pre-check | 1769 ms | 9.3 ms | pass | none |
+
+The interesting row is the third: when pairs fit, the trial *is* the result
+and the bound traversal disappears, so real-world input got **9% faster**.
+That is the shape of the win the plan predicted.
+
+It is paid for by the fallback. When pairs overflow, the group lays its
+subtree out a second time at different columns, so the memo cannot help —
+the plan's central assumption, that memoisation makes the trial affordable,
+is wrong for exactly the case the trial exists to handle. Nested fallbacks
+multiply, and the depth-99 chain doubles.
+
+The last row is the worst of both: the pre-check keeps the bound alive *and*
+the trial pays for the layout, so nothing is deleted and real input is 16%
+slower.
+
+### What this rules in and out
+
+Out: replacing the bound with trial layouts of both candidates.
+
+Still open: the original problem. Twelve findings across four PRs, all the
+bound disagreeing with the renderer, and nothing here changes that. What the
+attempt did establish is where the cost actually lives — the bound is cheap
+because it never branches on its own decisions, and any design that makes the
+decision by laying out both candidates inherits a branching factor the
+integer walk never had.
+
+A next attempt should keep the property that made the bound cheap, and attack
+the duplication instead: one traversal that yields both a measurement and the
+lines, so the two cannot diverge, rather than two traversals that agree by
+inspection. That is a different design, not a refinement of this one.
