@@ -234,6 +234,36 @@ pub(crate) fn layout_items(
     lines
 }
 
+/// Whether [`layout_group`] will return this group whole, on the line it
+/// starts on, rather than opening it out.
+///
+/// Extracted so the one caller that needs to *predict* this — pair layout,
+/// deciding whether a value can sit beside its key — asks the renderer's
+/// own question instead of restating it. A restatement is what this module
+/// keeps getting wrong; there is no second copy to drift here, which is the
+/// point: every condition [`layout_group`] uses to keep a group whole lives
+/// in this function and nowhere else.
+pub(crate) fn group_stays_whole(
+    g: &Group,
+    start_col: usize,
+    width: usize,
+    force: bool,
+    pending: usize,
+) -> bool {
+    // An empty call has nothing to open. `NOW()` is whole at any width, and
+    // whole even under `force` — so this is checked before both, or the
+    // predicate disagrees with the renderer about the one group that can
+    // never expand.
+    if g.is_empty_call() {
+        return true;
+    }
+    if force || group_forces_break(g) {
+        return false;
+    }
+    let inline = render_group_inline(g, false);
+    start_col + cols(&inline) <= width && emitted_last(start_col, &inline) + pending <= width
+}
+
 /// `start_col` is where this group's opening line begins — used for every
 /// "does it fit?" decision. `indent` is where its continuation lines and
 /// closing bracket sit. They differ only when a prefix pushed the group right
@@ -247,14 +277,7 @@ pub(crate) fn layout_group(
     pending: usize,
 ) -> Vec<String> {
     let inline = render_group_inline(g, false);
-    if !force
-        && !group_forces_break(g)
-        && start_col + cols(&inline) <= width
-        && emitted_last(start_col, &inline) + pending <= width
-    {
-        return vec![inline];
-    }
-    if g.is_empty_call() {
+    if group_stays_whole(g, start_col, width, force, pending) {
         return vec![inline];
     }
 

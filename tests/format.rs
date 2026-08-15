@@ -1473,6 +1473,29 @@ fn an_unbreakable_value_hangs_when_that_is_what_makes_it_fit() {
         assert!(line.chars().count() <= 15, "overflow:\n{out}");
     }
 
+    // A group in the value does not mean the renderer will open it: it
+    // returns a group whole whenever it fits at the column its prefix leaves
+    // it at. Reading "holds a group" as "will expand" hung this value one
+    // line down when it sits beside its key perfectly well.
+    let out = fmt_w("=LET(longkey,\"aaaa\nb\"&SUM(c,d),z,1,z)", 20).unwrap();
+    assert_eq!(
+        out,
+        "=LET(\n  longkey, \"aaaa\nb\" & SUM(c, d),\n  z,       1,\n  z\n)\n"
+    );
+    for line in out.lines() {
+        assert!(line.chars().count() <= 20, "overflow:\n{out}");
+    }
+
+    // An empty call can never open, so predicting that it will is always
+    // wrong. `layout_group` returns `NOW()` whole at any width and even
+    // under `force`; the shared predicate has to say so too, or the one
+    // group that cannot expand is the one predicted to.
+    let out = fmt_w("=LET(longkey,NOW()&\"aaaa\nb\",z,1,z)", 24).unwrap();
+    assert_eq!(
+        out,
+        "=LET(\n  longkey, NOW() & \"aaaa\nb\",\n  z,       1,\n  z\n)\n"
+    );
+
     // A group opens where the text before it *ends*, which for a prefix
     // carrying a newline is its final line, not the sum of them. Charging
     // the whole span pushed this `SUM` to a column it never occupies and
