@@ -72,14 +72,15 @@ place here.
 | `Group` | the unit of fits-or-breaks |
 | `Indent` | one nesting step |
 | `IfFlat` | the pair gutter — padding that exists only while the pair is flat |
-| `BestFitting{variants, mode, fallback}` | pair layout versus the plain per-argument layout — mode *and* fallback are load-bearing, see decision 6 |
+| `BestFitting{variants, mode, fallback}` | pair layout versus the plain per-argument layout, *once pairs are viable at all* — mode and fallback are both load-bearing, see decision 6 |
 
 ## Mapping
 
 | gsfmt today | becomes |
 |---|---|
-| all of `layout/bound.rs` — 206 lines | deleted; `fits` walks the print stream |
-| `pair_layout_fits` strategy choice | `BestFitting{[pairs, plain], AllLines, fallback: 0}` |
+| `layout/bound.rs` — 206 lines | deleted, less the key check, which becomes a trial print of one key; `fits` walks the print stream for everything else |
+| `pair_layout_fits`' key check | a build-time trial of each key; disqualifies pairs outright |
+| `pair_layout_fits`' width comparison | `BestFitting{[pairs, plain], AllLines, fallback: 0}` |
 | `pairs_align`, `PairKeys`, the gutter | `IfFlat(spaces(pad))`, the pad computed once before building the IR |
 | `pair_value_col` / `stays_inline` | a `Group` around the value; it breaks or it does not |
 | `always_breaks` (LET) | `Line(Hard)` inside the group |
@@ -106,7 +107,10 @@ whether it becomes none is the style question.
 between two others, so whatever measures the block measures the separator;
 there is nothing to thread and nothing to forget to thread.
 
-**The predictor/renderer split from #21** disappears with the predictor.
+**The predictor/renderer split from #21** mostly disappears. One question
+survives — is a key breakable and oversized — and it is answered by
+trial-printing that key rather than modelling it, so there is no second
+model, only a smaller measurement. See the spike section.
 
 ## Decisions this forces
 
@@ -148,7 +152,9 @@ These are real choices, not implementation detail. Settle them before step 3.
    adopt Ruff's rule and accept the style change, or keep physical-line
    measurement, which is implementable in `fits` alone.
 
-6. **`BestFitting` needs an explicit fallback and `AllLines`.**
+6. **`BestFitting` needs an explicit fallback and `AllLines` — and cannot
+   make the choice alone.** The spike section below shows the part it
+   cannot do; this decision covers the part it can.
 
    Ruff prints the *last* variant unconditionally, without measuring it —
    `// No variant fits, take the last (most expanded) as fallback`. So
@@ -206,13 +212,17 @@ rewrite of *how* the layout is decided, not of what it produces.
 2. Build the IR for the shapes with no pair layout — calls, arrays, operator
    chains, blank arguments. Print through the new printer behind a flag.
    Gate: `gnarly.gsfx` byte-identical.
-3. Pair layout as `BestFitting{[pairs, plain], AllLines, fallback: 0}`, plus
-   the `IfFlat` gutter. Gate in this order, because each catches a
-   different half of decision 6:
+3. Pair layout, in two parts, because the choice is made in two places.
+   First the build-time key check: if any key is breakable and oversized,
+   emit the plain document and stop — `BestFitting` cannot recover this and
+   the spike proves it. Otherwise emit
+   `BestFitting{[pairs, plain], AllLines, fallback: 0}` plus the `IfFlat`
+   gutter. Gate in this order, because each case catches a different piece:
    `pair_layout_yields_to_breakable_oversized_keys` first — its `SUMIFS`
-   case fails on a wrong *mode* (`FirstLine` never reaches the oversized
-   key) and its `veryLongBindingNameHere` case fails on a wrong *fallback*
-   (two variants would yield plain where the rule keeps pairs) — then
+   case fails without the *key check* (both variants overflow, so no mode
+   or fallback saves it) and its `veryLongBindingNameHere` case fails on a
+   wrong *fallback* (two variants would yield plain where the rule keeps
+   pairs) — then
    `monthly.gsfx` and `payperiods.gsfx` byte-identical. (Locally, also the
    760-line formula at width 82; see the note at the top.)
 4. Delete `src/layout/` entirely. Re-point the
